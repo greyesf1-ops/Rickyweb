@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RickySafe Maintenance</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main id="loginView" class="login-page">
+      <form id="loginForm" class="login-panel">
+        <p class="eyebrow">Rickylandia</p>
+        <h1>RickySafe Maintenance</h1>
+        <label>
+          Correo
+          <input id="emailInput" type="email" value="admin@rickysafe.local" autocomplete="email" />
+        </label>
+        <label>
+          Contraseña
+          <input id="passwordInput" type="password" value="admin123" autocomplete="current-password" />
+        </label>
+        <button type="submit">Entrar al sistema</button>
+        <button id="resetDataButton" class="ghost-button" type="button">Restablecer datos</button>
+        <small>Usuarios de prueba: admin, supervisor, tecnico o auditor con contraseña admin123.</small>
+      </form>
+    </main>
+
+    <div id="toast" class="toast hidden"></div>
+
+    <div id="appView" class="app hidden">
+      <div id="menuOverlay" class="menu-overlay" aria-hidden="true"></div>
+      <aside class="sidebar">
+        <div class="brand">
+          <span>Rickylandia</span>
+          <strong>RickySafe</strong>
+        </div>
+        <nav id="mainNav"></nav>
+      </aside>
+
+      <section class="workspace">
+        <header class="topbar">
+          <div class="topbar-title">
+            <button id="menuButton" class="hamburger" type="button" aria-label="Abrir menu">
+              <span></span>
+              <span></span>
+              <span></span>
+            </button>
+            <div>
+              <span id="moduleLabel">Inicio</span>
+              <h2>Panel de mantenimiento seguro</h2>
+            </div>
+          </div>
+          <div class="user-box">
+            <button id="homeButton" class="home-button" type="button">Inicio</button>
+            <span id="userRole">Administrador</span>
+            <button id="logoutButton" type="button">Salir</button>
+          </div>
+        </header>
+
+        <section id="content" class="content"></section>
+      </section>
+    </div>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

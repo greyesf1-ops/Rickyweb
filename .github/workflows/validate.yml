@@ -1,0 +1,37 @@
+name: Validar RickySafe
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+
+jobs:
+  validar:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Preparar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Instalar backend
+        working-directory: backend
+        run: npm install
+
+      - name: Validar sintaxis backend
+        working-directory: backend
+        run: npm run check
+
+      - name: Instalar frontend
+        working-directory: frontend
+        run: npm install
+
+      - name: Construir frontend
+        working-directory: frontend
+        run: npm run build
