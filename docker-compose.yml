@@ -1,0 +1,55 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: rickysafe-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-rickysafe_db}
+      POSTGRES_USER: ${POSTGRES_USER:-rickysafe_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cambia_esta_contrasena}
+    volumes:
+      - rickysafe_pgdata:/var/lib/postgresql/data
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ./database/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-rickysafe_user} -d ${POSTGRES_DB:-rickysafe_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+
+  backend:
+    build:
+      context: ./backend
+    container_name: rickysafe-backend
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: ${POSTGRES_DB:-rickysafe_db}
+      DB_USER: ${POSTGRES_USER:-rickysafe_user}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-cambia_esta_contrasena}
+      JWT_SECRET: ${JWT_SECRET:-cambia_esta_clave_larga}
+      UPLOAD_PATH: src/uploads/evidencias
+    volumes:
+      - rickysafe_evidencias:/app/src/uploads/evidencias
+    depends_on:
+      db:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: /api
+    container_name: rickysafe-web
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+
+volumes:
+  rickysafe_pgdata:
+  rickysafe_evidencias:

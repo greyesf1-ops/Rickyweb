@@ -1,0 +1,59 @@
+name: Deploy VPS
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      VPS_USER: ${{ secrets.VPS_USER }}
+      APP_DIR: ${{ secrets.APP_DIR }}
+      VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+      POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+      JWT_SECRET: ${{ secrets.JWT_SECRET }}
+
+    steps:
+      - name: Validar secrets
+        run: |
+          if [ -z "$VPS_HOST" ]; then echo "::error title=Missing secret::Add VPS_HOST"; exit 1; fi
+          if [ -z "$VPS_USER" ]; then echo "::error title=Missing secret::Add VPS_USER"; exit 1; fi
+          if [ -z "$APP_DIR" ]; then echo "::error title=Missing secret::Add APP_DIR"; exit 1; fi
+          if [ -z "$VPS_SSH_KEY" ]; then echo "::error title=Missing secret::Add VPS_SSH_KEY"; exit 1; fi
+          if [ -z "$POSTGRES_PASSWORD" ]; then echo "::error title=Missing secret::Add POSTGRES_PASSWORD"; exit 1; fi
+          if [ -z "$JWT_SECRET" ]; then echo "::error title=Missing secret::Add JWT_SECRET"; exit 1; fi
+
+      - name: Desplegar en VPS
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ env.VPS_HOST }}
+          username: ${{ env.VPS_USER }}
+          key: ${{ env.VPS_SSH_KEY }}
+          script: |
+            set -e
+            sudo mkdir -p "${{ env.APP_DIR }}"
+            sudo chown -R "$(whoami):$(whoami)" "${{ env.APP_DIR }}"
+            git config --global --add safe.directory "${{ env.APP_DIR }}"
+
+            if [ -d "${{ env.APP_DIR }}/.git" ]; then
+              cd "${{ env.APP_DIR }}"
+              git pull origin main
+            else
+              if [ "$(find "${{ env.APP_DIR }}" -mindepth 1 -maxdepth 1 | wc -l)" != "0" ]; then
+                echo "APP_DIR is not empty and is not a git repository: ${{ env.APP_DIR }}"
+                exit 1
+              fi
+              git clone https://github.com/greyesf1-ops/Rickyweb.git "${{ env.APP_DIR }}"
+              cd "${{ env.APP_DIR }}"
+            fi
+
+            cat > .env << 'EOF'
+            POSTGRES_DB=rickysafe_db
+            POSTGRES_USER=rickysafe_user
+            POSTGRES_PASSWORD=${{ env.POSTGRES_PASSWORD }}
+            JWT_SECRET=${{ env.JWT_SECRET }}
+            EOF
+
+            sudo docker compose -p rickysafe up -d --build
+            sudo docker compose -p rickysafe ps

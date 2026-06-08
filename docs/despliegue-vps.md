@@ -7,210 +7,152 @@ Publicar RickySafe Maintenance en una VPS para acceder desde PC y celular median
 ## Componentes recomendados
 
 - Ubuntu Server LTS.
-- Nginx como servidor web.
-- Node.js para el backend.
-- PostgreSQL para base de datos.
-- PM2 para mantener la API activa.
+- Docker y Docker Compose.
+- Nginx dentro del contenedor web.
+- Node.js dentro del contenedor backend.
+- PostgreSQL dentro de un contenedor propio del proyecto.
 - Certificado SSL para HTTPS.
 
 ## Flujo de despliegue
 
 ```text
-Usuario en celular o PC -> Nginx -> Frontend React -> API Node.js -> PostgreSQL
+Usuario en celular o PC -> IP publica puerto 80 -> rickysafe-web -> rickysafe-backend -> rickysafe-db
 ```
 
-## Pasos generales
-
-1. Instalar Node.js, PostgreSQL, Nginx y PM2.
-2. Crear la base de datos `rickysafe_db`.
-3. Ejecutar `database/schema.sql` y `database/seed.sql`.
-4. Configurar `.env` del backend.
-5. Instalar dependencias del backend y frontend.
-6. Construir el frontend con `npm run build`.
-7. Publicar el frontend con Nginx.
-8. Ejecutar el backend con PM2.
-9. Configurar HTTPS.
-
-## Despliegue paso a paso en Ubuntu
-
-### 1. Instalar paquetes
-
-```bash
-sudo apt update
-sudo apt install -y nginx postgresql postgresql-contrib git
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-sudo apt install -y nodejs
-sudo npm install -g pm2
-```
-
-### 2. Clonar el repositorio
-
-```bash
-sudo mkdir -p /var/www/rickysafe
-sudo chown -R $USER:$USER /var/www/rickysafe
-git clone URL_DE_TU_REPOSITORIO /var/www/rickysafe
-cd /var/www/rickysafe
-```
-
-### 3. Crear base de datos
-
-```bash
-sudo -u postgres psql
-```
-
-Dentro de PostgreSQL:
-
-```sql
-CREATE DATABASE rickysafe_db;
-CREATE USER rickysafe_user WITH PASSWORD 'CAMBIA_ESTA_CONTRASENA';
-GRANT ALL PRIVILEGES ON DATABASE rickysafe_db TO rickysafe_user;
-\q
-```
-
-Ejecutar estructura y datos iniciales:
-
-```bash
-sudo -u postgres psql -d rickysafe_db -f database/schema.sql
-sudo -u postgres psql -d rickysafe_db -f database/seed.sql
-```
-
-### 4. Configurar backend
-
-```bash
-cd /var/www/rickysafe/backend
-cp .env.example .env
-nano .env
-```
-
-Valores recomendados:
+Este despliegue no toca el proyecto anterior `helpdesk-ai`. Usa otra carpeta, otro nombre de proyecto Docker y otros contenedores:
 
 ```text
-PORT=3001
-DB_HOST=localhost
-DB_PORT=5432
-DB_NAME=rickysafe_db
-DB_USER=rickysafe_user
-DB_PASSWORD=CAMBIA_ESTA_CONTRASENA
-JWT_SECRET=USA_UNA_CLAVE_LARGA_Y_PRIVADA
-UPLOAD_PATH=src/uploads/evidencias
-NODE_ENV=production
+/opt/rickysafe
+rickysafe-web
+rickysafe-backend
+rickysafe-db
 ```
 
-Instalar dependencias y crear carpeta de evidencias:
-
-```bash
-npm install
-mkdir -p src/uploads/evidencias
-```
-
-### 5. Configurar frontend
-
-```bash
-cd /var/www/rickysafe/frontend
-cp .env.production.example .env.production
-npm install
-npm run build
-```
-
-Para servir todo bajo la misma IP o dominio, `VITE_API_URL` debe quedar asi:
-
-```text
-VITE_API_URL=/api
-```
-
-### 6. Levantar API con PM2
-
-```bash
-cd /var/www/rickysafe
-pm2 start deploy/ecosystem.config.js
-pm2 save
-pm2 startup
-```
-
-Comprobar API:
-
-```bash
-curl http://127.0.0.1:3001/api/salud
-```
-
-Debe responder algo como:
-
-```json
-{"estado":"ok","sistema":"RickySafe Maintenance"}
-```
-
-### 7. Configurar Nginx
-
-```bash
-sudo cp deploy/nginx-rickysafe.conf.example /etc/nginx/sites-available/rickysafe
-sudo nano /etc/nginx/sites-available/rickysafe
-sudo ln -s /etc/nginx/sites-available/rickysafe /etc/nginx/sites-enabled/rickysafe
-sudo nginx -t
-sudo systemctl reload nginx
-```
-
-En el archivo cambia:
-
-```text
-server_name TU_DOMINIO_O_IP;
-```
-
-por la IP de la VPS o tu dominio.
-
-### 8. Probar desde navegador
+La web queda en:
 
 ```text
 http://IP_DE_LA_VPS
 ```
 
-Para probar la API publica:
+No necesitas escribir `:8080` ni exponer PostgreSQL al exterior.
 
-```text
-http://IP_DE_LA_VPS/api/salud
-```
+## Pasos generales
 
-### 9. HTTPS cuando ya tengas dominio
+1. Instalar Docker en la VPS.
+2. Clonar el repositorio en `/opt/rickysafe`.
+3. Crear `.env` con contraseña de PostgreSQL y `JWT_SECRET`.
+4. Levantar servicios con Docker Compose.
+5. Abrir el puerto 80 en el firewall/security group.
+6. Configurar HTTPS cuando tengas dominio.
 
-Con dominio configurado al servidor:
+## Despliegue recomendado con Docker
 
-```bash
-sudo apt install -y certbot python3-certbot-nginx
-sudo certbot --nginx -d tu-dominio.com
-```
-
-Con solo IP publica no se recomienda configurar certificado SSL tradicional; lo normal es usar dominio.
-
-## Actualizar una version nueva
-
-Cuando subas cambios al repositorio:
+### 1. Entrar a la VPS
 
 ```bash
-cd /var/www/rickysafe
-git pull
-cd backend && npm install
-cd ../frontend && npm install && npm run build
-pm2 restart rickysafe-api
-sudo systemctl reload nginx
+ssh ubuntu@IP_DE_LA_VPS
 ```
 
-## GitHub Actions
+### 2. Instalar Docker
 
-El repositorio incluye `.github/workflows/validate.yml` para validar cada push o pull request. Esto no despliega automaticamente; solo confirma que el backend carga y que el frontend compila.
+```bash
+sudo apt update
+sudo apt install -y ca-certificates curl git
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo tee /etc/apt/keyrings/docker.asc > /dev/null
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+sudo apt update
+sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+```
 
-Para despliegue automatico por Actions harian falta secretos de GitHub:
+### 3. Clonar RickySafe sin tocar el proyecto anterior
+
+```bash
+sudo mkdir -p /opt/rickysafe
+sudo chown -R $USER:$USER /opt/rickysafe
+git clone https://github.com/greyesf1-ops/Rickyweb.git /opt/rickysafe
+cd /opt/rickysafe
+```
+
+### 4. Crear variables de produccion
+
+```bash
+cp .env.docker.example .env
+nano .env
+```
+
+Cambia estos valores:
 
 ```text
-VPS_HOST
-VPS_USER
-VPS_SSH_KEY
-VPS_PATH=/var/www/rickysafe
+POSTGRES_PASSWORD=una_contrasena_segura
+JWT_SECRET=una_clave_larga_privada
+```
+
+### 5. Levantar todo
+
+```bash
+sudo docker compose -p rickysafe up -d --build
+sudo docker compose -p rickysafe ps
+```
+
+### 6. Probar
+
+```bash
+curl http://127.0.0.1/api/salud
+```
+
+Desde navegador:
+
+```text
+http://IP_DE_LA_VPS
+```
+
+### 7. Actualizar despues de un cambio
+
+```bash
+cd /opt/rickysafe
+git pull origin main
+sudo docker compose -p rickysafe up -d --build
+sudo docker compose -p rickysafe ps
+```
+
+### 8. Ver logs si algo falla
+
+```bash
+sudo docker compose -p rickysafe logs -f backend
+sudo docker compose -p rickysafe logs -f web
+sudo docker compose -p rickysafe logs -f db
+```
+
+## GitHub Actions para despliegue manual
+
+El workflow `.github/workflows/deploy-vps.yml` queda manual para que no falle antes de configurar secrets.
+
+Agrega estos secrets en GitHub:
+
+```text
+VPS_HOST=IP_DE_LA_VPS
+VPS_USER=ubuntu
+APP_DIR=/opt/rickysafe
+VPS_SSH_KEY=llave_privada_ssh
+POSTGRES_PASSWORD=contrasena_segura_db
+JWT_SECRET=clave_larga_privada
+```
+
+Luego ejecuta:
+
+```text
+Actions -> Deploy VPS -> Run workflow
 ```
 
 ## Archivos de apoyo
 
 ```text
-deploy/nginx-rickysafe.conf.example
-deploy/ecosystem.config.js
+docker-compose.yml
+.env.docker.example
+.github/workflows/deploy-vps.yml
+.github/workflows/validate.yml
 ```
 
 ## Acceso
@@ -218,7 +160,7 @@ deploy/ecosystem.config.js
 Con IP:
 
 ```text
-http://IP-DE-LA-VPS
+http://IP_DE_LA_VPS
 ```
 
 Con dominio:

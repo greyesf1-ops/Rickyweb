@@ -126,15 +126,14 @@ La guía para publicar en VPS está en:
 docs/despliegue-vps.md
 ```
 
-Resumen recomendado para entrega:
+Resumen recomendado para entrega con Docker:
 
 1. Subir este proyecto a GitHub.
 2. Crear la VPS con Ubuntu LTS.
-3. Clonar el repositorio en `/var/www/rickysafe`.
-4. Configurar `backend/.env` y `frontend/.env.production`.
-5. Ejecutar migracion/seed de PostgreSQL.
-6. Construir frontend con `npm run build`.
-7. Servir `frontend/dist` con Nginx y correr la API con PM2.
+3. Clonar el repositorio en `/opt/rickysafe`.
+4. Crear `.env` desde `.env.docker.example`.
+5. Levantar todo con `sudo docker compose -p rickysafe up -d --build`.
+6. Abrir `http://IP_DE_LA_VPS` sin puerto adicional.
 
 ## GitHub Actions
 
