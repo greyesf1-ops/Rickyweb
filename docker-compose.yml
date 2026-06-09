@@ -35,7 +35,7 @@ services:
     volumes:
       - rickysafe_evidencias:/app/src/uploads/evidencias
       - ./database:/app/database:ro
-    command: sh -c "node src/migrate.js && npm start"
+    command: sh -c "node src/migrate.js || true; npm start"
     depends_on:
       db:
         condition: service_healthy
