@@ -34,6 +34,8 @@ services:
       UPLOAD_PATH: src/uploads/evidencias
     volumes:
       - rickysafe_evidencias:/app/src/uploads/evidencias
+      - ./database:/app/database:ro
+    command: sh -c "node src/migrate.js && npm start"
     depends_on:
       db:
         condition: service_healthy

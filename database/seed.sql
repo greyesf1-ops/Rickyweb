@@ -15,6 +15,9 @@ ON CONFLICT (correo) DO NOTHING;
 UPDATE usuarios
 SET
     debe_cambiar_contrasena = FALSE,
+    must_change_password = FALSE,
+    temporary_password = FALSE,
+    password_updated_at = COALESCE(password_updated_at, fecha_cambio_contrasena),
     departamento = CASE correo
         WHEN 'admin@rickysafe.local' THEN 'Administracion'
         WHEN 'supervisor@rickysafe.local' THEN 'Seguridad industrial'
