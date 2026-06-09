@@ -74,10 +74,10 @@ const mantenimientosIniciales = [
 ];
 
 const usuariosIniciales = [
-  { id: 1, nombre: 'Georgean Reyes', correo: 'admin@rickysafe.local', usuario: 'admin', rol: 'Administrador', departamento: 'Administracion', turno: 'Diurno', telefono: '5555-0101', ultimoAcceso: '2026-06-07 00:30', activo: true, temporal: false },
-  { id: 2, nombre: 'Supervisor de Seguridad', correo: 'supervisor@rickysafe.local', usuario: 'supervisor', rol: 'Supervisor', departamento: 'Seguridad industrial', turno: 'Mixto', telefono: '5555-0202', ultimoAcceso: '2026-06-06 23:45', activo: true, temporal: false },
-  { id: 3, nombre: 'Tecnico de Mantenimiento', correo: 'tecnico@rickysafe.local', usuario: 'tecnico', rol: 'Tecnico', departamento: 'Mantenimiento', turno: 'Matutino', telefono: '5555-0303', ultimoAcceso: '2026-06-06 22:15', activo: true, temporal: false },
-  { id: 4, nombre: 'Auditor Interno', correo: 'auditor@rickysafe.local', usuario: 'auditor', rol: 'Auditor', departamento: 'Auditoria', turno: 'Diurno', telefono: '5555-0404', ultimoAcceso: '2026-06-07 00:25', activo: true, temporal: false }
+  { id: 1, nombre: 'Georgean Reyes', correo: 'admin@rickysafe.local', usuario: 'admin', contrasena: 'admin123', rol: 'Administrador', departamento: 'Administracion', turno: 'Diurno', telefono: '5555-0101', ultimoAcceso: '2026-06-07 00:30', activo: true, temporal: false },
+  { id: 2, nombre: 'Supervisor de Seguridad', correo: 'supervisor@rickysafe.local', usuario: 'supervisor', contrasena: 'admin123', rol: 'Supervisor', departamento: 'Seguridad industrial', turno: 'Mixto', telefono: '5555-0202', ultimoAcceso: '2026-06-06 23:45', activo: true, temporal: false },
+  { id: 3, nombre: 'Tecnico de Mantenimiento', correo: 'tecnico@rickysafe.local', usuario: 'tecnico', contrasena: 'admin123', rol: 'Tecnico', departamento: 'Mantenimiento', turno: 'Matutino', telefono: '5555-0303', ultimoAcceso: '2026-06-06 22:15', activo: true, temporal: false },
+  { id: 4, nombre: 'Auditor Interno', correo: 'auditor@rickysafe.local', usuario: 'auditor', contrasena: 'admin123', rol: 'Auditor', departamento: 'Auditoria', turno: 'Diurno', telefono: '5555-0404', ultimoAcceso: '2026-06-07 00:25', activo: true, temporal: false }
 ];
 
 const alertasIniciales = [
@@ -103,6 +103,31 @@ function generarContrasenaTemporal() {
   return `Ricky#${numero}Tmp`;
 }
 
+function normalizarUsuarios(usuarios) {
+  return usuarios.map((usuario) => ({
+    ...usuario,
+    contrasena: usuario.contrasena || usuario.contrasenaTemporal || 'admin123',
+    temporal: usuario.temporal === true,
+    activo: usuario.activo !== false
+  }));
+}
+
+function cargarUsuarios() {
+  try {
+    const guardados = JSON.parse(localStorage.getItem('rickysafe_usuarios') || 'null');
+    if (Array.isArray(guardados) && guardados.length) {
+      return normalizarUsuarios(guardados);
+    }
+  } catch {
+    // Si localStorage esta corrupto, se regresa a los usuarios base.
+  }
+  return normalizarUsuarios(usuariosIniciales);
+}
+
+function guardarUsuarios(usuarios) {
+  localStorage.setItem('rickysafe_usuarios', JSON.stringify(usuarios));
+}
+
 function totalHoras(mantenimiento) {
   return (mantenimiento.registrosHoras || []).reduce((total, item) => total + Number(item.horas || 0), 0);
 }
@@ -115,18 +140,103 @@ function porcentajeAvance(mantenimiento) {
   return Math.min(Math.round((totalHoras(mantenimiento) / Number(mantenimiento.maxHoras || 15)) * 100), 100);
 }
 
+function descargarArchivo(nombre, contenido, tipo) {
+  const blob = new Blob([contenido], { type: tipo });
+  const url = URL.createObjectURL(blob);
+  const enlace = document.createElement('a');
+  enlace.href = url;
+  enlace.download = nombre;
+  document.body.appendChild(enlace);
+  enlace.click();
+  enlace.remove();
+  URL.revokeObjectURL(url);
+}
+
+function escaparCsv(valor) {
+  return `"${String(valor ?? '').replaceAll('"', '""')}"`;
+}
+
+function escaparPdf(valor) {
+  return String(valor ?? '')
+    .replaceAll('\\', '\\\\')
+    .replaceAll('(', '\\(')
+    .replaceAll(')', '\\)');
+}
+
+function crearPdfSimple(lineas) {
+  const contenido = [
+    'BT',
+    '/F1 12 Tf',
+    '50 790 Td',
+    ...lineas.slice(0, 34).flatMap((linea, index) => [
+      index === 0 ? '' : '0 -20 Td',
+      `(${escaparPdf(linea)}) Tj`
+    ]).filter(Boolean),
+    'ET'
+  ].join('\n');
+  const objetos = [
+    '1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n',
+    '2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n',
+    '3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n',
+    '4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n',
+    `5 0 obj\n<< /Length ${contenido.length} >>\nstream\n${contenido}\nendstream\nendobj\n`
+  ];
+  let pdf = '%PDF-1.4\n';
+  const offsets = [0];
+  objetos.forEach((objeto) => {
+    offsets.push(pdf.length);
+    pdf += objeto;
+  });
+  const xrefOffset = pdf.length;
+  pdf += `xref\n0 ${objetos.length + 1}\n`;
+  pdf += '0000000000 65535 f \n';
+  offsets.slice(1).forEach((offset) => {
+    pdf += `${String(offset).padStart(10, '0')} 00000 n \n`;
+  });
+  pdf += `trailer\n<< /Size ${objetos.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
+  return pdf;
+}
+
 function Login() {
   const { iniciarSesion } = useAuth();
+  const [mensaje, setMensaje] = useState('');
 
   function submit(event) {
     event.preventDefault();
+    const data = Object.fromEntries(new FormData(event.currentTarget));
+    const identificador = String(data.identificador || '').trim().toLowerCase();
+    const contrasena = String(data.contrasena || '');
+    const usuarios = cargarUsuarios();
+    const encontrado = usuarios.find((item) => (
+      item.correo.toLowerCase() === identificador || item.usuario.toLowerCase() === identificador
+    ));
+
+    if (!encontrado) {
+      setMensaje('Usuario no encontrado.');
+      return;
+    }
+
+    if (!encontrado.activo) {
+      setMensaje('Usuario inactivo. Solicita reactivacion al administrador.');
+      return;
+    }
+
+    if (encontrado.contrasena !== contrasena && encontrado.contrasenaTemporal !== contrasena) {
+      setMensaje('Contraseña incorrecta.');
+      return;
+    }
+
     iniciarSesion({
       token: 'local-preview-token',
       usuario: {
-        nombre_completo: 'Georgean Reyes',
-        correo: 'admin@rickysafe.local',
-        rol: 'Administrador',
-        debe_cambiar_contrasena: false
+        id_usuario: encontrado.id,
+        nombre_completo: encontrado.nombre,
+        correo: encontrado.correo,
+        usuario: encontrado.usuario,
+        rol: encontrado.rol,
+        debe_cambiar_contrasena: encontrado.temporal,
+        must_change_password: encontrado.temporal,
+        temporary_password: encontrado.temporal
       }
     });
   }
@@ -137,13 +247,14 @@ function Login() {
         <p className="text-sm font-semibold uppercase tracking-widest text-brand-teal">RickySafe Maintenance</p>
         <h1 className="mt-2 text-3xl font-bold text-slate-900">Inicio de sesion</h1>
         <label className="mt-6 block text-sm font-semibold text-slate-700">
-          Correo
-          <input className="mt-2 w-full rounded border border-slate-300 px-3 py-2" defaultValue="admin@rickysafe.local" />
+          Correo o usuario
+          <input name="identificador" className="mt-2 w-full rounded border border-slate-300 px-3 py-2" defaultValue="admin@rickysafe.local" />
         </label>
         <label className="mt-4 block text-sm font-semibold text-slate-700">
           Contrasena
-          <input className="mt-2 w-full rounded border border-slate-300 px-3 py-2" type="password" defaultValue="admin123" />
+          <input name="contrasena" className="mt-2 w-full rounded border border-slate-300 px-3 py-2" type="password" defaultValue="admin123" />
         </label>
+        {mensaje ? <p className="mt-4 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-900">{mensaje}</p> : null}
         <button className="mt-6 w-full rounded-lg bg-brand-navy px-4 py-2 font-semibold text-white" type="submit">
           Entrar al sistema
         </button>
@@ -169,6 +280,31 @@ function CambioContrasenaObligatorio() {
       setMensaje('La confirmacion no coincide con la nueva contrasena.');
       return;
     }
+
+    const usuarios = cargarUsuarios();
+    const encontrado = usuarios.find((item) => item.correo === usuario?.correo);
+    if (!encontrado) {
+      setMensaje('Usuario no encontrado.');
+      return;
+    }
+
+    if (encontrado.contrasena !== data.actual && encontrado.contrasenaTemporal !== data.actual) {
+      setMensaje('La contrasena temporal actual no coincide.');
+      return;
+    }
+
+    const actualizados = usuarios.map((item) => (
+      item.correo === usuario.correo
+        ? {
+            ...item,
+            contrasena: data.nueva,
+            contrasenaTemporal: '',
+            temporal: false,
+            ultimoAcceso: new Date().toLocaleString('es-GT')
+          }
+        : item
+    ));
+    guardarUsuarios(actualizados);
 
     actualizarUsuario({
       debe_cambiar_contrasena: false,
@@ -683,7 +819,47 @@ function ReportesView({ mantenimientos }) {
   }, {});
 
   function exportar(formato) {
-    setMensaje(`Reporte preparado en formato ${formato}.`);
+    if (!mantenimientos.length) {
+      setMensaje('No hay información para exportar.');
+      return;
+    }
+
+    const encabezados = ['ID', 'Juego', 'Tipo', 'Tecnico', 'Prioridad', 'Estado', 'Horas', 'Fecha inicio', 'Fecha fin'];
+    const filas = mantenimientos.map((item) => [
+      item.id,
+      item.juego,
+      item.tipo,
+      item.tecnico,
+      item.prioridad,
+      item.estado,
+      `${totalHoras(item)}/${item.maxHoras || 15}`,
+      item.fechaInicio || item.fecha,
+      item.fechaFin || 'Pendiente'
+    ]);
+
+    if (formato === 'CSV') {
+      const csv = '\uFEFFsep=;\n' + [encabezados, ...filas]
+        .map((fila) => fila.map(escaparCsv).join(';'))
+        .join('\n');
+      descargarArchivo('rickysafe-reporte.csv', csv, 'text/csv;charset=utf-8');
+    } else if (formato === 'Excel') {
+      const tabla = [encabezados, ...filas]
+        .map((fila) => `<tr>${fila.map((valor) => `<td>${String(valor ?? '')}</td>`).join('')}</tr>`)
+        .join('');
+      const excel = `<!doctype html><html><head><meta charset="utf-8" /></head><body><table>${tabla}</table></body></html>`;
+      descargarArchivo('rickysafe-reporte.xls', excel, 'application/vnd.ms-excel;charset=utf-8');
+    } else {
+      const lineas = [
+        'RickySafe Maintenance',
+        'Reporte de ordenes de mantenimiento',
+        `Generado: ${new Date().toLocaleString('es-GT')}`,
+        '',
+        ...filas.map((fila) => `Orden ${fila[0]} - ${fila[1]} - ${fila[5]} - Horas ${fila[6]}`)
+      ];
+      descargarArchivo('rickysafe-reporte.pdf', crearPdfSimple(lineas), 'application/pdf');
+    }
+
+    setMensaje(`Reporte descargado en formato ${formato}.`);
   }
 
   return (
@@ -775,31 +951,40 @@ function AppShell() {
   const { usuario, cerrarSesion } = useAuth();
   const [activo, setActivo] = useState('dashboard');
   const [menuAbierto, setMenuAbierto] = useState(false);
-  const [usuarios, setUsuarios] = useState(usuariosIniciales);
+  const [usuarios, setUsuarios] = useState(cargarUsuarios);
   const [mantenimientos, setMantenimientos] = useState(mantenimientosIniciales);
   const [alertas, setAlertas] = useState(alertasIniciales);
   const [mantenimientoSeleccionado, setMantenimientoSeleccionado] = useState(1);
 
   function toggleUsuario(id) {
-    setUsuarios((actuales) => actuales.map((item) => (
-      item.id === id ? { ...item, activo: !item.activo } : item
-    )));
+    setUsuarios((actuales) => {
+      const actualizados = actuales.map((item) => (
+        item.id === id ? { ...item, activo: !item.activo } : item
+      ));
+      guardarUsuarios(actualizados);
+      return actualizados;
+    });
   }
 
   function crearUsuario(data) {
     const duplicado = usuarios.some((item) => item.correo === data.correo || item.usuario === data.usuario);
     if (duplicado) return false;
 
-    setUsuarios((actuales) => [
-      ...actuales,
-      {
+    setUsuarios((actuales) => {
+      const actualizados = [
+        ...actuales,
+        {
         id: Math.max(0, ...actuales.map((item) => item.id)) + 1,
         ...data,
+        contrasena: data.contrasenaTemporal,
         ultimoAcceso: 'Pendiente',
         activo: true,
         temporal: true
-      }
-    ]);
+        }
+      ];
+      guardarUsuarios(actualizados);
+      return actualizados;
+    });
     return true;
   }
 
