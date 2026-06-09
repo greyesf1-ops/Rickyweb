@@ -5,7 +5,10 @@ const path = require('path');
 const db = require('./config/database');
 
 async function ejecutarArchivo(ruta) {
-  const sql = fs.readFileSync(ruta, 'utf8');
+  const sql = fs.readFileSync(ruta, 'utf8')
+    .split('\n')
+    .filter((linea) => !linea.trim().toUpperCase().startsWith('CREATE EXTENSION'))
+    .join('\n');
   await db.query(sql);
 }
 

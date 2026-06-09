@@ -60,3 +60,4 @@ jobs:
 
             sudo docker compose -p rickysafe up -d --build
             sudo docker compose -p rickysafe ps
+            sudo docker compose -p rickysafe logs --tail=80 backend
