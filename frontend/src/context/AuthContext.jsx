@@ -15,6 +15,11 @@ export function AuthProvider({ children }) {
       localStorage.setItem('rickysafe_usuario', JSON.stringify(payload.usuario));
       setUsuario(payload.usuario);
     },
+    actualizarUsuario(data) {
+      const actualizado = { ...usuario, ...data };
+      localStorage.setItem('rickysafe_usuario', JSON.stringify(actualizado));
+      setUsuario(actualizado);
+    },
     cerrarSesion() {
       localStorage.removeItem('rickysafe_token');
       localStorage.removeItem('rickysafe_usuario');
@@ -28,4 +33,3 @@ export function AuthProvider({ children }) {
 export function useAuth() {
   return useContext(AuthContext);
 }
-

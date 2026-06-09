@@ -102,6 +102,79 @@ async function obtenerMantenimientos(filtros = {}) {
   return rows;
 }
 
+function crearCodigo(prefijo) {
+  const fecha = new Date();
+  const stamp = [
+    fecha.getFullYear(),
+    String(fecha.getMonth() + 1).padStart(2, '0'),
+    String(fecha.getDate()).padStart(2, '0'),
+    String(fecha.getHours()).padStart(2, '0'),
+    String(fecha.getMinutes()).padStart(2, '0'),
+    String(fecha.getSeconds()).padStart(2, '0')
+  ].join('');
+  const aleatorio = Math.floor(100 + Math.random() * 900);
+  return `${prefijo}-${stamp}-${aleatorio}`;
+}
+
+function normalizarHoras(valor) {
+  const horas = Number(valor);
+  return Number.isFinite(horas) ? Math.round(horas * 100) / 100 : 0;
+}
+
+async function obtenerOrdenes(filtros = {}) {
+  const condiciones = [];
+  const valores = [];
+
+  if (filtros.estado) {
+    valores.push(filtros.estado);
+    condiciones.push(`o.status = $${valores.length}`);
+  }
+
+  if (filtros.prioridad) {
+    valores.push(filtros.prioridad);
+    condiciones.push(`o.priority = $${valores.length}`);
+  }
+
+  if (filtros.tecnico) {
+    valores.push(filtros.tecnico);
+    condiciones.push(`o.assigned_to = $${valores.length}`);
+  }
+
+  if (filtros.fecha_inicio) {
+    valores.push(filtros.fecha_inicio);
+    condiciones.push(`DATE(o.created_at) >= $${valores.length}`);
+  }
+
+  if (filtros.fecha_fin) {
+    valores.push(filtros.fecha_fin);
+    condiciones.push(`DATE(o.created_at) <= $${valores.length}`);
+  }
+
+  const where = condiciones.length ? `WHERE ${condiciones.join(' AND ')}` : '';
+
+  const { rows } = await db.query(
+    `SELECT
+       o.*,
+       r.code AS request_code,
+       r.title AS request_title,
+       j.nombre_juego,
+       u.nombre_completo AS responsable,
+       COALESCE(SUM(w.hours_worked), 0)::numeric(5,2) AS horas_trabajadas,
+       GREATEST(o.max_hours - COALESCE(SUM(w.hours_worked), 0), 0)::numeric(5,2) AS horas_restantes
+     FROM maintenance_orders o
+     LEFT JOIN maintenance_requests r ON r.id = o.request_id
+     LEFT JOIN juegos j ON j.id_juego = o.id_juego
+     LEFT JOIN usuarios u ON u.id_usuario = o.assigned_to
+     LEFT JOIN maintenance_work_logs w ON w.order_id = o.id
+     ${where}
+     GROUP BY o.id, r.id, j.id_juego, u.id_usuario
+     ORDER BY o.created_at DESC`,
+    valores
+  );
+
+  return rows;
+}
+
 app.get('/api/salud', (_req, res) => {
   res.json({ estado: 'ok', sistema: 'RickySafe Maintenance' });
 });
@@ -114,19 +187,25 @@ app.post('/api/auth/login', async (req, res, next) => {
       `SELECT u.*, r.nombre_rol
        FROM usuarios u
        JOIN roles r ON r.id_rol = u.id_rol
-       WHERE u.correo = $1 AND u.estado = TRUE`,
+       WHERE (u.correo = $1 OR u.usuario = $1)`,
       [correo]
     );
 
     const usuario = rows[0];
     if (!usuario) {
-      return res.status(401).json({ mensaje: 'Credenciales invalidas' });
+      return res.status(404).json({ mensaje: 'Usuario no encontrado' });
+    }
+
+    if (!usuario.estado) {
+      return res.status(403).json({ mensaje: 'Usuario inactivo' });
     }
 
     const valido = await verificarPassword(usuario.contrasena, contrasena);
     if (!valido) {
-      return res.status(401).json({ mensaje: 'Credenciales invalidas' });
+      return res.status(401).json({ mensaje: 'Contraseña incorrecta' });
     }
+
+    const debeCambiar = usuario.must_change_password === true || usuario.debe_cambiar_contrasena === true;
 
     await registrarAuditoria({
       idUsuario: usuario.id_usuario,
@@ -142,7 +221,9 @@ app.post('/api/auth/login', async (req, res, next) => {
         nombre_completo: usuario.nombre_completo,
         correo: usuario.correo,
         rol: usuario.nombre_rol,
-        debe_cambiar_contrasena: usuario.debe_cambiar_contrasena
+        debe_cambiar_contrasena: debeCambiar,
+        must_change_password: debeCambiar,
+        temporary_password: usuario.temporary_password === true
       }
     });
   } catch (error) {
@@ -159,7 +240,8 @@ app.get('/api/usuarios', autenticar, permitirRoles('Administrador', 'Auditor'), 
     const { rows } = await db.query(
       `SELECT u.id_usuario, u.nombre_completo, u.correo, u.usuario,
               u.departamento, u.turno, u.telefono, u.ultimo_acceso, u.estado,
-              u.debe_cambiar_contrasena, u.fecha_creacion, r.nombre_rol AS rol
+              u.debe_cambiar_contrasena, u.must_change_password, u.temporary_password,
+              u.password_updated_at, u.fecha_creacion, r.nombre_rol AS rol
        FROM usuarios u
        JOIN roles r ON r.id_rol = u.id_rol
        ORDER BY u.fecha_creacion DESC`
@@ -187,9 +269,11 @@ app.post('/api/usuarios', autenticar, permitirRoles('Administrador'), async (req
 
     const { rows } = await db.query(
       `INSERT INTO usuarios
-       (id_rol, nombre_completo, correo, usuario, contrasena, debe_cambiar_contrasena, departamento, turno, telefono)
-       VALUES ($1, $2, $3, $4, $5, TRUE, $6, $7, $8)
-       RETURNING id_usuario, nombre_completo, correo, usuario, estado, debe_cambiar_contrasena, fecha_creacion`,
+       (id_rol, nombre_completo, correo, usuario, contrasena, debe_cambiar_contrasena,
+        must_change_password, temporary_password, departamento, turno, telefono)
+       VALUES ($1, $2, $3, $4, $5, TRUE, TRUE, TRUE, $6, $7, $8)
+       RETURNING id_usuario, nombre_completo, correo, usuario, estado,
+                 debe_cambiar_contrasena, must_change_password, temporary_password, fecha_creacion`,
       [id_rol, nombre_completo, correo, usuario, hash, departamento || null, turno || null, telefono || null]
     );
 
@@ -230,7 +314,10 @@ app.post('/api/auth/cambiar-contrasena', autenticar, async (req, res, next) => {
     await db.query(
       `UPDATE usuarios
        SET contrasena = $1, debe_cambiar_contrasena = FALSE,
+           must_change_password = FALSE,
+           temporary_password = FALSE,
            fecha_cambio_contrasena = CURRENT_TIMESTAMP,
+           password_updated_at = CURRENT_TIMESTAMP,
            fecha_actualizacion = CURRENT_TIMESTAMP
        WHERE id_usuario = $2`,
       [hash, req.usuario.id_usuario]
@@ -367,6 +454,320 @@ app.post('/api/protocolos/:id/pasos', autenticar, permitirRoles('Administrador')
     res.status(201).json(rows[0]);
   } catch (error) {
     next(error);
+  }
+});
+
+app.get('/api/solicitudes-mantenimiento', autenticar, async (_req, res, next) => {
+  try {
+    const { rows } = await db.query(
+      `SELECT r.*, u.nombre_completo AS solicitado_por, j.nombre_juego
+       FROM maintenance_requests r
+       LEFT JOIN usuarios u ON u.id_usuario = r.requested_by
+       LEFT JOIN juegos j ON j.id_juego = r.id_juego
+       ORDER BY r.created_at DESC`
+    );
+    res.json(rows);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/solicitudes-mantenimiento', autenticar, async (req, res, next) => {
+  try {
+    const {
+      title,
+      description,
+      area,
+      equipment,
+      id_juego,
+      priority
+    } = req.body;
+
+    if (!title || !description) {
+      return res.status(400).json({ mensaje: 'Titulo y descripcion son obligatorios' });
+    }
+
+    const { rows } = await db.query(
+      `INSERT INTO maintenance_requests
+       (code, title, description, area, equipment, id_juego, priority, requested_by)
+       VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, 'Media'), $8)
+       RETURNING *`,
+      [
+        crearCodigo('SOL'),
+        title,
+        description,
+        area || null,
+        equipment || null,
+        id_juego || null,
+        priority,
+        req.usuario.id_usuario
+      ]
+    );
+
+    await registrarAuditoria({
+      idUsuario: req.usuario.id_usuario,
+      accion: 'Solicitud de mantenimiento creada',
+      modulo: 'Mantenimientos',
+      descripcion: rows[0].code
+    });
+
+    return res.status(201).json(rows[0]);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post('/api/solicitudes-mantenimiento/:id/generar-orden', autenticar, permitirRoles('Administrador', 'Supervisor'), async (req, res, next) => {
+  const client = await db.pool.connect();
+
+  try {
+    const { assigned_to, observations } = req.body;
+    await client.query('BEGIN');
+
+    const solicitudResult = await client.query(
+      'SELECT * FROM maintenance_requests WHERE id = $1 FOR UPDATE',
+      [req.params.id]
+    );
+    const solicitud = solicitudResult.rows[0];
+
+    if (!solicitud) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ mensaje: 'Solicitud no encontrada' });
+    }
+
+    if (solicitud.status === 'Convertida') {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ mensaje: 'La solicitud ya fue convertida en orden' });
+    }
+
+    const ordenResult = await client.query(
+      `INSERT INTO maintenance_orders
+       (request_id, order_code, id_juego, assigned_to, status, priority, description, observations)
+       VALUES ($1, $2, $3, $4, 'Pendiente', $5, $6, $7)
+       RETURNING *`,
+      [
+        solicitud.id,
+        crearCodigo('ORD'),
+        solicitud.id_juego,
+        assigned_to || req.usuario.id_usuario,
+        solicitud.priority,
+        solicitud.description,
+        observations || null
+      ]
+    );
+
+    await client.query(
+      `UPDATE maintenance_requests
+       SET status = 'Convertida', updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1`,
+      [solicitud.id]
+    );
+
+    await client.query('COMMIT');
+
+    await registrarAuditoria({
+      idUsuario: req.usuario.id_usuario,
+      accion: 'Solicitud convertida en orden',
+      modulo: 'Mantenimientos',
+      descripcion: `${solicitud.code} -> ${ordenResult.rows[0].order_code}`
+    });
+
+    return res.status(201).json(ordenResult.rows[0]);
+  } catch (error) {
+    await client.query('ROLLBACK');
+    return next(error);
+  } finally {
+    client.release();
+  }
+});
+
+app.get('/api/ordenes-mantenimiento', autenticar, async (req, res, next) => {
+  try {
+    res.json(await obtenerOrdenes(req.query));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/ordenes-mantenimiento', autenticar, permitirRoles('Administrador', 'Supervisor'), async (req, res, next) => {
+  try {
+    const {
+      id_juego,
+      assigned_to,
+      priority,
+      description,
+      observations,
+      start_date
+    } = req.body;
+
+    if (!description) {
+      return res.status(400).json({ mensaje: 'La descripcion de la orden es obligatoria' });
+    }
+
+    const { rows } = await db.query(
+      `INSERT INTO maintenance_orders
+       (order_code, id_juego, assigned_to, status, priority, description, observations, start_date)
+       VALUES ($1, $2, $3, 'Pendiente', COALESCE($4, 'Media'), $5, $6, $7)
+       RETURNING *`,
+      [
+        crearCodigo('ORD'),
+        id_juego || null,
+        assigned_to || req.usuario.id_usuario,
+        priority,
+        description,
+        observations || null,
+        start_date || null
+      ]
+    );
+
+    await registrarAuditoria({
+      idUsuario: req.usuario.id_usuario,
+      accion: 'Orden de mantenimiento creada',
+      modulo: 'Mantenimientos',
+      descripcion: rows[0].order_code
+    });
+
+    return res.status(201).json(rows[0]);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.get('/api/ordenes-mantenimiento/:id/horas', autenticar, async (req, res, next) => {
+  try {
+    const { rows } = await db.query(
+      `SELECT w.*, u.nombre_completo AS tecnico
+       FROM maintenance_work_logs w
+       JOIN usuarios u ON u.id_usuario = w.user_id
+       WHERE w.order_id = $1
+       ORDER BY w.work_date DESC, w.created_at DESC`,
+      [req.params.id]
+    );
+    res.json(rows);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/ordenes-mantenimiento/:id/horas', autenticar, permitirRoles('Administrador', 'Tecnico', 'Supervisor'), async (req, res, next) => {
+  const client = await db.pool.connect();
+
+  try {
+    const { work_date, hours_worked, description, progress_status, evidence } = req.body;
+    const horas = normalizarHoras(hours_worked);
+
+    if (horas <= 0) {
+      return res.status(400).json({ mensaje: 'Las horas trabajadas deben ser mayores a 0' });
+    }
+
+    if (!description || !description.trim()) {
+      return res.status(400).json({ mensaje: 'La descripcion del trabajo realizado es obligatoria' });
+    }
+
+    await client.query('BEGIN');
+
+    const ordenResult = await client.query(
+      'SELECT * FROM maintenance_orders WHERE id = $1 FOR UPDATE',
+      [req.params.id]
+    );
+    const orden = ordenResult.rows[0];
+
+    if (!orden) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ mensaje: 'Orden de mantenimiento no encontrada' });
+    }
+
+    if (['Finalizada', 'Cancelada'].includes(orden.status)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ mensaje: 'La orden ya no acepta nuevos registros de horas' });
+    }
+
+    const horasResult = await client.query(
+      'SELECT COALESCE(SUM(hours_worked), 0)::numeric(5,2) AS total FROM maintenance_work_logs WHERE order_id = $1',
+      [orden.id]
+    );
+    const totalActual = normalizarHoras(horasResult.rows[0].total);
+    const maxHoras = normalizarHoras(orden.max_hours || 15);
+    if (totalActual + horas > maxHoras) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        mensaje: `No se pueden registrar ${horas} horas. La orden va en ${totalActual}/${maxHoras} horas.`
+      });
+    }
+
+    const logResult = await client.query(
+      `INSERT INTO maintenance_work_logs
+       (order_id, user_id, work_date, hours_worked, description, progress_status, evidence)
+       VALUES ($1, $2, COALESCE($3, CURRENT_DATE), $4, $5, COALESCE($6, 'En proceso'), $7)
+       RETURNING *`,
+      [
+        orden.id,
+        req.usuario.id_usuario,
+        work_date || null,
+        horas,
+        description,
+        progress_status,
+        evidence || null
+      ]
+    );
+
+    const nuevoTotal = totalActual + horas;
+    await client.query(
+      `UPDATE maintenance_orders
+       SET total_hours = $1,
+           status = CASE WHEN status = 'Pendiente' THEN 'En proceso' ELSE status END,
+           start_date = COALESCE(start_date, CURRENT_TIMESTAMP),
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2`,
+      [nuevoTotal, orden.id]
+    );
+
+    await client.query('COMMIT');
+
+    await registrarAuditoria({
+      idUsuario: req.usuario.id_usuario,
+      accion: 'Horas registradas',
+      modulo: 'Mantenimientos',
+      descripcion: `${orden.order_code}: ${horas} horas`
+    });
+
+    return res.status(201).json({ ...logResult.rows[0], total_hours: nuevoTotal, max_hours: maxHoras });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    return next(error);
+  } finally {
+    client.release();
+  }
+});
+
+app.put('/api/ordenes-mantenimiento/:id/finalizar', autenticar, permitirRoles('Administrador', 'Tecnico', 'Supervisor'), async (req, res, next) => {
+  try {
+    const { observations } = req.body;
+    const { rows } = await db.query(
+      `UPDATE maintenance_orders
+       SET status = 'Finalizada',
+           end_date = CURRENT_TIMESTAMP,
+           observations = COALESCE($1, observations),
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2 AND status NOT IN ('Finalizada', 'Cancelada')
+       RETURNING *`,
+      [observations || null, req.params.id]
+    );
+
+    if (!rows[0]) {
+      return res.status(404).json({ mensaje: 'Orden no encontrada o ya finalizada' });
+    }
+
+    await registrarAuditoria({
+      idUsuario: req.usuario.id_usuario,
+      accion: 'Orden finalizada',
+      modulo: 'Mantenimientos',
+      descripcion: rows[0].order_code
+    });
+
+    return res.json(rows[0]);
+  } catch (error) {
+    return next(error);
   }
 });
 
@@ -826,12 +1227,23 @@ app.post('/api/mantenimientos/:id/rechazar', autenticar, permitirRoles('Administ
 app.get('/api/reportes/personalizado', autenticar, permitirRoles('Administrador', 'Supervisor', 'Auditor'), async (req, res, next) => {
   try {
     const mantenimientos = await obtenerMantenimientos(req.query);
+    const ordenes = await obtenerOrdenes(req.query);
+    const solicitudesResult = await db.query(
+      `SELECT r.*, u.nombre_completo AS solicitado_por, j.nombre_juego
+       FROM maintenance_requests r
+       LEFT JOIN usuarios u ON u.id_usuario = r.requested_by
+       LEFT JOIN juegos j ON j.id_juego = r.id_juego
+       ORDER BY r.created_at DESC`
+    );
     const resumen = mantenimientos.reduce((acc, item) => {
       acc.total += 1;
       acc.por_estado[item.estado] = (acc.por_estado[item.estado] || 0) + 1;
       acc.por_tipo[item.tipo_mantenimiento] = (acc.por_tipo[item.tipo_mantenimiento] || 0) + 1;
       return acc;
     }, { total: 0, por_estado: {}, por_tipo: {} });
+    resumen.ordenes = ordenes.length;
+    resumen.solicitudes = solicitudesResult.rows.length;
+    resumen.horas_trabajadas = ordenes.reduce((total, item) => total + Number(item.horas_trabajadas || 0), 0);
 
     res.json({
       sistema: 'RickySafe Maintenance',
@@ -840,7 +1252,9 @@ app.get('/api/reportes/personalizado', autenticar, permitirRoles('Administrador'
       fecha_generacion: new Date().toISOString(),
       filtros: req.query,
       resumen,
-      resultados: mantenimientos
+      resultados: mantenimientos,
+      solicitudes: solicitudesResult.rows,
+      ordenes
     });
   } catch (error) {
     next(error);
@@ -850,6 +1264,10 @@ app.get('/api/reportes/personalizado', autenticar, permitirRoles('Administrador'
 app.get('/api/reportes/exportar/csv', autenticar, permitirRoles('Administrador', 'Supervisor', 'Auditor'), async (req, res, next) => {
   try {
     const mantenimientos = await obtenerMantenimientos(req.query);
+    const ordenes = await obtenerOrdenes(req.query);
+    if (!mantenimientos.length && !ordenes.length) {
+      return res.status(404).json({ mensaje: 'No hay información para exportar' });
+    }
     const valorCsv = (valor) => `"${String(valor ?? '').replaceAll('"', '""')}"`;
     const filasBase = [
       ['Sistema', 'RickySafe Maintenance'],
@@ -857,6 +1275,7 @@ app.get('/api/reportes/exportar/csv', autenticar, permitirRoles('Administrador',
       ['Fecha de generacion', new Date().toISOString()],
       ['Usuario', req.usuario.nombre],
       [],
+      ['Mantenimientos'],
       ['ID', 'Juego', 'Tipo', 'Tecnico', 'Estado', 'Fecha inicio', 'Supervisor', 'Resultado']
     ];
     const filas = mantenimientos.map((item) => [
@@ -869,7 +1288,25 @@ app.get('/api/reportes/exportar/csv', autenticar, permitirRoles('Administrador',
       item.supervisor || 'Pendiente',
       item.resultado_validacion || 'Pendiente'
     ]);
-    const csv = '\uFEFFsep=;\n' + [...filasBase, ...filas]
+    const filasOrdenes = [
+      [],
+      ['Ordenes de mantenimiento'],
+      ['Codigo', 'Solicitud', 'Juego', 'Responsable', 'Prioridad', 'Estado', 'Fecha inicio', 'Fecha fin', 'Horas', 'Horas restantes', 'Observaciones'],
+      ...ordenes.map((item) => [
+        item.order_code,
+        item.request_code || 'Directa',
+        item.nombre_juego || 'Sin juego',
+        item.responsable || 'Sin asignar',
+        item.priority,
+        item.status,
+        item.start_date || 'Pendiente',
+        item.end_date || 'Pendiente',
+        `${item.horas_trabajadas || 0}/${item.max_hours || 15}`,
+        item.horas_restantes,
+        item.observations || ''
+      ])
+    ];
+    const csv = '\uFEFFsep=;\n' + [...filasBase, ...filas, ...filasOrdenes]
       .map((row) => row.map(valorCsv).join(';'))
       .join('\n');
 
@@ -891,6 +1328,10 @@ app.get('/api/reportes/exportar/csv', autenticar, permitirRoles('Administrador',
 app.get('/api/reportes/exportar/excel', autenticar, permitirRoles('Administrador', 'Supervisor', 'Auditor'), async (req, res, next) => {
   try {
     const mantenimientos = await obtenerMantenimientos(req.query);
+    const ordenes = await obtenerOrdenes(req.query);
+    if (!mantenimientos.length && !ordenes.length) {
+      return res.status(404).json({ mensaje: 'No hay información para exportar' });
+    }
     const escaparXml = (valor) => String(valor ?? '')
       .replaceAll('&', '&amp;')
       .replaceAll('<', '&lt;')
@@ -928,6 +1369,7 @@ app.get('/api/reportes/exportar/excel', autenticar, permitirRoles('Administrador
             ${filaExcel(['Fecha de generacion', new Date().toISOString()])}
             ${filaExcel(['Usuario', req.usuario.nombre])}
             ${filaExcel([])}
+            ${filaExcel(['Mantenimientos'], 'Title')}
             ${filaExcel(['ID', 'Juego', 'Tipo', 'Tecnico', 'Estado', 'Fecha inicio', 'Supervisor', 'Resultado'], 'Header')}
             ${mantenimientos.map((item) => filaExcel([
               item.id_mantenimiento,
@@ -938,6 +1380,27 @@ app.get('/api/reportes/exportar/excel', autenticar, permitirRoles('Administrador
               item.fecha_inicio,
               item.supervisor || 'Pendiente',
               item.resultado_validacion || 'Pendiente'
+            ])).join('')}
+            ${filaExcel([])}
+            ${filaExcel(['Ordenes de mantenimiento'], 'Title')}
+            ${filaExcel(['Codigo', 'Solicitud', 'Juego', 'Responsable', 'Prioridad', 'Estado', 'Inicio', 'Fin'], 'Header')}
+            ${ordenes.map((item) => filaExcel([
+              item.order_code,
+              item.request_code || 'Directa',
+              item.nombre_juego || 'Sin juego',
+              item.responsable || 'Sin asignar',
+              item.priority,
+              item.status,
+              item.start_date || 'Pendiente',
+              item.end_date || 'Pendiente'
+            ])).join('')}
+            ${filaExcel(['Codigo', 'Horas trabajadas', 'Maximo', 'Horas restantes', 'Observaciones'], 'Header')}
+            ${ordenes.map((item) => filaExcel([
+              item.order_code,
+              item.horas_trabajadas || 0,
+              item.max_hours || 15,
+              item.horas_restantes || 0,
+              item.observations || ''
             ])).join('')}
           </Table>
         </Worksheet>
@@ -962,6 +1425,10 @@ app.get('/api/reportes/exportar/excel', autenticar, permitirRoles('Administrador
 app.get('/api/reportes/exportar/pdf', autenticar, permitirRoles('Administrador', 'Supervisor', 'Auditor'), async (req, res, next) => {
   try {
     const mantenimientos = await obtenerMantenimientos(req.query);
+    const ordenes = await obtenerOrdenes(req.query);
+    if (!mantenimientos.length && !ordenes.length) {
+      return res.status(404).json({ mensaje: 'No hay información para exportar' });
+    }
 
     await registrarAuditoria({
       idUsuario: req.usuario.id_usuario,
@@ -1003,7 +1470,8 @@ app.get('/api/reportes/exportar/pdf', autenticar, permitirRoles('Administrador',
       .text(`Total: ${resumen.total}`, 48, 128)
       .text(`Validados: ${resumen.validados}`, 180, 128)
       .text(`En revision: ${resumen.revision}`, 330, 128)
-      .text(`Pendientes: ${resumen.pendientes}`, 500, 128);
+      .text(`Pendientes: ${resumen.pendientes}`, 500, 128)
+      .text(`Ordenes: ${ordenes.length}`, 650, 128);
 
     const columnas = [
       { label: 'ID', width: 34 },
@@ -1057,6 +1525,71 @@ app.get('/api/reportes/exportar/pdf', autenticar, permitirRoles('Administrador',
         item.resultado_validacion || 'Pendiente'
       ]);
     });
+
+    if (ordenes.length) {
+      y += 18;
+      if (y > 500) {
+        doc.addPage();
+        y = 44;
+      }
+      doc
+        .fillColor('#162238')
+        .fontSize(14)
+        .text('Ordenes y horas trabajadas', 36, y);
+      y += 24;
+
+      const columnasOrdenes = [
+        { label: 'Codigo', width: 84 },
+        { label: 'Juego', width: 116 },
+        { label: 'Responsable', width: 138 },
+        { label: 'Prioridad', width: 70 },
+        { label: 'Estado', width: 82 },
+        { label: 'Horas', width: 70 },
+        { label: 'Rest.', width: 54 },
+        { label: 'Observaciones', width: 156 }
+      ];
+
+      function dibujarFilaOrden(celdas, encabezado = false) {
+        if (y > 540) {
+          doc.addPage();
+          y = 44;
+        }
+
+        let x = 36;
+        const alto = encabezado ? 24 : 32;
+
+        columnasOrdenes.forEach((columna, index) => {
+          doc
+            .rect(x, y, columna.width, alto)
+            .fillAndStroke(encabezado ? '#162238' : '#ffffff', '#cbd5e1');
+          doc
+            .fillColor(encabezado ? '#ffffff' : '#172033')
+            .fontSize(encabezado ? 9 : 8)
+            .text(String(celdas[index] ?? ''), x + 4, y + 7, {
+              width: columna.width - 8,
+              height: alto - 10,
+              ellipsis: true
+            });
+          x += columna.width;
+        });
+
+        y += alto;
+      }
+
+      dibujarFilaOrden(columnasOrdenes.map((columna) => columna.label), true);
+      ordenes.forEach((item) => {
+        dibujarFilaOrden([
+          item.order_code,
+          item.nombre_juego || 'Sin juego',
+          item.responsable || 'Sin asignar',
+          item.priority,
+          item.status,
+          `${item.horas_trabajadas || 0}/${item.max_hours || 15}`,
+          item.horas_restantes || 0,
+          item.observations || ''
+        ]);
+      });
+    }
 
     doc.end();
   } catch (error) {

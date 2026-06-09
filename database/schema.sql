@@ -22,6 +22,9 @@ CREATE TABLE IF NOT EXISTS usuarios (
     telefono VARCHAR(30),
     ultimo_acceso TIMESTAMP,
     estado BOOLEAN DEFAULT TRUE,
+    must_change_password BOOLEAN DEFAULT FALSE,
+    temporary_password BOOLEAN DEFAULT FALSE,
+    password_updated_at TIMESTAMP,
     fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     fecha_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -32,6 +35,17 @@ ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS telefono VARCHAR(30);
 ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS ultimo_acceso TIMESTAMP;
 ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS debe_cambiar_contrasena BOOLEAN DEFAULT FALSE;
 ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS fecha_cambio_contrasena TIMESTAMP;
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN DEFAULT FALSE;
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS temporary_password BOOLEAN DEFAULT FALSE;
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS password_updated_at TIMESTAMP;
+
+UPDATE usuarios
+SET must_change_password = debe_cambiar_contrasena
+WHERE must_change_password IS DISTINCT FROM debe_cambiar_contrasena;
+
+UPDATE usuarios
+SET password_updated_at = fecha_cambio_contrasena
+WHERE password_updated_at IS NULL AND fecha_cambio_contrasena IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS juegos (
     id_juego SERIAL PRIMARY KEY,
@@ -87,6 +101,53 @@ ALTER TABLE mantenimientos ADD COLUMN IF NOT EXISTS epp_evidencia VARCHAR(255);
 ALTER TABLE mantenimientos ADD COLUMN IF NOT EXISTS epp_observaciones TEXT;
 ALTER TABLE mantenimientos ADD COLUMN IF NOT EXISTS epp_fecha TIMESTAMP;
 ALTER TABLE mantenimientos ADD COLUMN IF NOT EXISTS epp_notificado BOOLEAN DEFAULT FALSE;
+
+CREATE TABLE IF NOT EXISTS maintenance_requests (
+    id SERIAL PRIMARY KEY,
+    code VARCHAR(40) NOT NULL UNIQUE,
+    title VARCHAR(150) NOT NULL,
+    description TEXT NOT NULL,
+    area VARCHAR(120),
+    equipment VARCHAR(150),
+    id_juego INT REFERENCES juegos(id_juego),
+    priority VARCHAR(30) DEFAULT 'Media',
+    status VARCHAR(40) DEFAULT 'Pendiente',
+    requested_by INT REFERENCES usuarios(id_usuario),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS maintenance_orders (
+    id SERIAL PRIMARY KEY,
+    request_id INT REFERENCES maintenance_requests(id) ON DELETE SET NULL,
+    order_code VARCHAR(40) NOT NULL UNIQUE,
+    id_mantenimiento INT REFERENCES mantenimientos(id_mantenimiento) ON DELETE SET NULL,
+    id_juego INT REFERENCES juegos(id_juego),
+    assigned_to INT REFERENCES usuarios(id_usuario),
+    status VARCHAR(40) DEFAULT 'Pendiente',
+    priority VARCHAR(30) DEFAULT 'Media',
+    description TEXT,
+    start_date TIMESTAMP,
+    end_date TIMESTAMP,
+    max_hours NUMERIC(5,2) DEFAULT 15 CHECK (max_hours > 0),
+    total_hours NUMERIC(5,2) DEFAULT 0 CHECK (total_hours >= 0),
+    observations TEXT,
+    evidence VARCHAR(255),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS maintenance_work_logs (
+    id SERIAL PRIMARY KEY,
+    order_id INT NOT NULL REFERENCES maintenance_orders(id) ON DELETE CASCADE,
+    user_id INT NOT NULL REFERENCES usuarios(id_usuario),
+    work_date DATE NOT NULL DEFAULT CURRENT_DATE,
+    hours_worked NUMERIC(5,2) NOT NULL CHECK (hours_worked > 0),
+    description TEXT NOT NULL,
+    progress_status VARCHAR(40) DEFAULT 'En proceso',
+    evidence VARCHAR(255),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 
 CREATE TABLE IF NOT EXISTS checklist_mantenimiento (
     id_checklist SERIAL PRIMARY KEY,
@@ -183,3 +244,9 @@ CREATE INDEX IF NOT EXISTS idx_auditoria_fecha ON auditoria(fecha_hora);
 CREATE INDEX IF NOT EXISTS idx_repuestos_mantenimiento_usuario ON repuestos_mantenimiento(id_usuario);
 CREATE INDEX IF NOT EXISTS idx_repuestos_mantenimiento_mantenimiento ON repuestos_mantenimiento(id_mantenimiento);
 CREATE INDEX IF NOT EXISTS idx_alertas_seguridad_estado ON alertas_seguridad(estado);
+CREATE INDEX IF NOT EXISTS idx_maintenance_requests_status ON maintenance_requests(status);
+CREATE INDEX IF NOT EXISTS idx_maintenance_requests_created ON maintenance_requests(created_at);
+CREATE INDEX IF NOT EXISTS idx_maintenance_orders_status ON maintenance_orders(status);
+CREATE INDEX IF NOT EXISTS idx_maintenance_orders_assigned ON maintenance_orders(assigned_to);
+CREATE INDEX IF NOT EXISTS idx_maintenance_work_logs_order ON maintenance_work_logs(order_id);
+CREATE INDEX IF NOT EXISTS idx_maintenance_work_logs_date ON maintenance_work_logs(work_date);

@@ -11,8 +11,16 @@ const mantenimientosIniciales = [
     juego: 'Rueda Mecanica',
     tipo: 'Correctivo',
     tecnico: 'Tecnico de Mantenimiento',
+    prioridad: 'Alta',
     estado: 'En revision',
     fecha: '2026-06-06',
+    fechaInicio: '2026-06-06',
+    fechaFin: '',
+    maxHoras: 15,
+    registrosHoras: [
+      { id: 1, fecha: '2026-06-06', horas: 3, descripcion: 'Revision electrica y medicion inicial.', usuario: 'Tecnico de Mantenimiento' },
+      { id: 2, fecha: '2026-06-07', horas: 2, descripcion: 'Ajuste de sensor y prueba de vibracion.', usuario: 'Tecnico de Mantenimiento' }
+    ],
     evidencias: ['foto-antes-rueda.jpg', 'medicion-electrica.pdf', 'epp-tecnico-rueda.jpg'],
     epp: {
       verificado: true,
@@ -26,8 +34,15 @@ const mantenimientosIniciales = [
     juego: 'Carros Chocones',
     tipo: 'Preventivo',
     tecnico: 'Tecnico de Mantenimiento',
+    prioridad: 'Media',
     estado: 'Validado',
     fecha: '2026-06-05',
+    fechaInicio: '2026-06-05',
+    fechaFin: '2026-06-05',
+    maxHoras: 15,
+    registrosHoras: [
+      { id: 1, fecha: '2026-06-05', horas: 4, descripcion: 'Mantenimiento preventivo completado.', usuario: 'Tecnico de Mantenimiento' }
+    ],
     evidencias: ['checklist-firmado.pdf', 'epp-carros-chocones.jpg'],
     epp: {
       verificado: true,
@@ -41,8 +56,13 @@ const mantenimientosIniciales = [
     juego: 'Carrusel',
     tipo: 'Periodico',
     tecnico: 'Tecnico de Mantenimiento',
+    prioridad: 'Baja',
     estado: 'Pendiente',
     fecha: '2026-06-06',
+    fechaInicio: '',
+    fechaFin: '',
+    maxHoras: 15,
+    registrosHoras: [],
     evidencias: [],
     epp: {
       verificado: false,
@@ -83,6 +103,18 @@ function generarContrasenaTemporal() {
   return `Ricky#${numero}Tmp`;
 }
 
+function totalHoras(mantenimiento) {
+  return (mantenimiento.registrosHoras || []).reduce((total, item) => total + Number(item.horas || 0), 0);
+}
+
+function horasRestantes(mantenimiento) {
+  return Math.max(Number(mantenimiento.maxHoras || 15) - totalHoras(mantenimiento), 0);
+}
+
+function porcentajeAvance(mantenimiento) {
+  return Math.min(Math.round((totalHoras(mantenimiento) / Number(mantenimiento.maxHoras || 15)) * 100), 100);
+}
+
 function Login() {
   const { iniciarSesion } = useAuth();
 
@@ -115,6 +147,65 @@ function Login() {
         <button className="mt-6 w-full rounded-lg bg-brand-navy px-4 py-2 font-semibold text-white" type="submit">
           Entrar al sistema
         </button>
+      </form>
+    </main>
+  );
+}
+
+function CambioContrasenaObligatorio() {
+  const { usuario, actualizarUsuario, cerrarSesion } = useAuth();
+  const [mensaje, setMensaje] = useState('');
+
+  function submit(event) {
+    event.preventDefault();
+    const data = Object.fromEntries(new FormData(event.currentTarget));
+
+    if (!/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{10,}$/.test(data.nueva || '')) {
+      setMensaje('La nueva contrasena debe tener mayuscula, minuscula, numero, simbolo y minimo 10 caracteres.');
+      return;
+    }
+
+    if (data.nueva !== data.confirmacion) {
+      setMensaje('La confirmacion no coincide con la nueva contrasena.');
+      return;
+    }
+
+    actualizarUsuario({
+      debe_cambiar_contrasena: false,
+      must_change_password: false,
+      temporary_password: false
+    });
+  }
+
+  return (
+    <main className="grid min-h-screen place-items-center bg-slate-100 px-4">
+      <form onSubmit={submit} className="w-full max-w-lg rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+        <p className="text-sm font-semibold uppercase tracking-widest text-brand-teal">RickySafe Maintenance</p>
+        <h1 className="mt-2 text-3xl font-bold text-slate-900">Crear contrasena personal</h1>
+        <p className="mt-3 text-sm text-slate-600">
+          {usuario?.nombre_completo || 'Usuario'}, debes cambiar la contrasena temporal antes de entrar al sistema.
+        </p>
+        <label className="mt-6 block text-sm font-semibold text-slate-700">
+          Contrasena temporal actual
+          <input name="actual" type="password" required className="mt-2 w-full rounded border border-slate-300 px-3 py-2" />
+        </label>
+        <label className="mt-4 block text-sm font-semibold text-slate-700">
+          Nueva contrasena
+          <input name="nueva" type="password" required className="mt-2 w-full rounded border border-slate-300 px-3 py-2" />
+        </label>
+        <label className="mt-4 block text-sm font-semibold text-slate-700">
+          Confirmar nueva contrasena
+          <input name="confirmacion" type="password" required className="mt-2 w-full rounded border border-slate-300 px-3 py-2" />
+        </label>
+        {mensaje ? <p className="mt-4 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-900">{mensaje}</p> : null}
+        <div className="mt-6 flex flex-wrap gap-3">
+          <button className="rounded-lg bg-brand-navy px-4 py-2 font-semibold text-white" type="submit">
+            Guardar y continuar
+          </button>
+          <button className="rounded-lg bg-slate-200 px-4 py-2 font-semibold text-slate-800" type="button" onClick={cerrarSesion}>
+            Salir
+          </button>
+        </div>
       </form>
     </main>
   );
@@ -184,6 +275,8 @@ function TablaMantenimientos({ mantenimientos, onSelect }) {
             <th className="px-3 py-2">Juego</th>
             <th className="px-3 py-2">Tipo</th>
             <th className="px-3 py-2">Tecnico</th>
+            <th className="px-3 py-2">Prioridad</th>
+            <th className="px-3 py-2">Horas</th>
             <th className="px-3 py-2">EPP</th>
             <th className="px-3 py-2">Estado</th>
             {onSelect ? <th className="px-3 py-2">Accion</th> : null}
@@ -196,6 +289,8 @@ function TablaMantenimientos({ mantenimientos, onSelect }) {
               <td className="px-3 py-3">{item.juego}</td>
               <td className="px-3 py-3">{item.tipo}</td>
               <td className="px-3 py-3">{item.tecnico}</td>
+              <td className="px-3 py-3"><BadgeEstado estado={item.prioridad || 'Media'} /></td>
+              <td className="px-3 py-3 font-semibold">{totalHoras(item)}/{item.maxHoras || 15}</td>
               <td className="px-3 py-3"><BadgeEstado estado={item.epp?.verificado ? 'Validado' : 'Pendiente'} /></td>
               <td className="px-3 py-3"><BadgeEstado estado={item.estado} /></td>
               {onSelect ? (
@@ -357,7 +452,7 @@ function UsuariosView({ usuarios, usuarioActual, onToggle, onCreate }) {
   );
 }
 
-function MantenimientosView({ mantenimientos, onVerificarEpp, onEnviarRevision, onSelect, seleccionadoId }) {
+function MantenimientosView({ mantenimientos, onVerificarEpp, onEnviarRevision, onRegistrarHoras, onFinalizarOrden, onSelect, seleccionadoId }) {
   const [mensaje, setMensaje] = useState('');
   const seleccionado = mantenimientos.find((item) => item.id === seleccionadoId) || mantenimientos[0];
 
@@ -389,6 +484,30 @@ function MantenimientosView({ mantenimientos, onVerificarEpp, onEnviarRevision, 
     setMensaje(resultado);
   }
 
+  function registrarHoras(event) {
+    event.preventDefault();
+    const data = Object.fromEntries(new FormData(event.currentTarget));
+    const resultado = onRegistrarHoras(seleccionado.id, {
+      fecha: data.fecha,
+      horas: Number(data.horas),
+      descripcion: data.descripcion,
+      evidencia: event.currentTarget.elements.evidenciaHoras.files[0]?.name || ''
+    });
+    setMensaje(resultado);
+    if (resultado.startsWith('Horas registradas')) {
+      event.currentTarget.reset();
+    }
+  }
+
+  function finalizarOrden() {
+    setMensaje(onFinalizarOrden(seleccionado.id));
+  }
+
+  const horasTrabajadas = totalHoras(seleccionado);
+  const restantes = horasRestantes(seleccionado);
+  const avance = porcentajeAvance(seleccionado);
+  const estaFinalizada = seleccionado.estado === 'Finalizada' || seleccionado.estado === 'Cancelada' || seleccionado.estado === 'Validado';
+
   return (
     <section className="space-y-5">
       <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
@@ -401,9 +520,72 @@ function MantenimientosView({ mantenimientos, onVerificarEpp, onEnviarRevision, 
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <div>
               <h3 className="text-xl font-bold text-slate-900">Orden {seleccionado.id} - {seleccionado.juego}</h3>
-              <p className="text-sm text-slate-500">{seleccionado.tipo} / {seleccionado.tecnico}</p>
+              <p className="text-sm text-slate-500">{seleccionado.tipo} / {seleccionado.tecnico} / Prioridad {seleccionado.prioridad}</p>
             </div>
             <BadgeEstado estado={seleccionado.estado} />
+          </div>
+
+          <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <CardResumen titulo="Horas trabajadas" valor={`${horasTrabajadas}/${seleccionado.maxHoras || 15}`} detalle="Maximo por orden" />
+            <CardResumen titulo="Restantes" valor={restantes} detalle="Horas disponibles" />
+            <CardResumen titulo="Avance" valor={`${avance}%`} detalle="Segun horas registradas" />
+            <CardResumen titulo="Responsable" valor={seleccionado.tecnico.split(' ')[0]} detalle={seleccionado.tecnico} />
+          </div>
+
+          <div className="mb-4 h-3 overflow-hidden rounded bg-slate-200">
+            <div className="h-full bg-brand-teal" style={{ width: `${avance}%` }} />
+          </div>
+
+          <form onSubmit={registrarHoras} className="mb-4 grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 md:grid-cols-4">
+            <label className="text-sm font-semibold text-slate-700">
+              Fecha
+              <input name="fecha" type="date" defaultValue={new Date().toISOString().slice(0, 10)} className="mt-1 w-full rounded border border-slate-300 px-3 py-2" />
+            </label>
+            <label className="text-sm font-semibold text-slate-700">
+              Horas
+              <input name="horas" type="number" min="0.25" max="15" step="0.25" required disabled={estaFinalizada || restantes <= 0} className="mt-1 w-full rounded border border-slate-300 px-3 py-2" />
+            </label>
+            <label className="text-sm font-semibold text-slate-700 md:col-span-2">
+              Evidencia opcional
+              <input name="evidenciaHoras" type="file" disabled={estaFinalizada || restantes <= 0} className="mt-1 w-full rounded border border-slate-300 bg-white px-3 py-2" />
+            </label>
+            <label className="text-sm font-semibold text-slate-700 md:col-span-4">
+              Descripcion del trabajo realizado
+              <textarea name="descripcion" required disabled={estaFinalizada || restantes <= 0} className="mt-1 min-h-20 w-full rounded border border-slate-300 px-3 py-2" />
+            </label>
+            <div className="flex flex-wrap gap-3 md:col-span-4">
+              <button type="submit" disabled={estaFinalizada || restantes <= 0} className="rounded-lg bg-brand-navy px-4 py-2 font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-400">
+                Guardar horas
+              </button>
+              <button type="button" onClick={finalizarOrden} disabled={estaFinalizada} className="rounded-lg bg-emerald-700 px-4 py-2 font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-400">
+                Finalizar orden
+              </button>
+            </div>
+          </form>
+
+          <div className="mb-4 overflow-x-auto rounded-lg border border-slate-200">
+            <table className="w-full min-w-[720px] text-left text-sm">
+              <thead className="bg-slate-50 text-xs uppercase text-slate-500">
+                <tr>
+                  <th className="px-3 py-2">Fecha</th>
+                  <th className="px-3 py-2">Horas</th>
+                  <th className="px-3 py-2">Tecnico</th>
+                  <th className="px-3 py-2">Trabajo realizado</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(seleccionado.registrosHoras || []).length ? seleccionado.registrosHoras.map((registro) => (
+                  <tr key={registro.id} className="border-t border-slate-100">
+                    <td className="px-3 py-3">{registro.fecha}</td>
+                    <td className="px-3 py-3 font-semibold">{registro.horas}</td>
+                    <td className="px-3 py-3">{registro.usuario}</td>
+                    <td className="px-3 py-3">{registro.descripcion}</td>
+                  </tr>
+                )) : (
+                  <tr><td className="px-3 py-3 text-slate-500" colSpan="4">Sin horas registradas</td></tr>
+                )}
+              </tbody>
+            </table>
           </div>
 
           <form key={seleccionado.id} onSubmit={guardarEpp} className="grid gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4 md:grid-cols-2">
@@ -669,6 +851,66 @@ function AppShell() {
     return 'Mantenimiento enviado a revision.';
   }
 
+  function registrarHoras(id, data) {
+    const mantenimiento = mantenimientos.find((item) => item.id === id);
+    if (!mantenimiento) return 'Orden no encontrada.';
+    if (['Finalizada', 'Cancelada', 'Validado'].includes(mantenimiento.estado)) {
+      return 'La orden ya no acepta nuevos registros de horas.';
+    }
+
+    const horas = Number(data.horas || 0);
+    if (horas <= 0) return 'Las horas trabajadas deben ser mayores a 0.';
+
+    const totalActual = totalHoras(mantenimiento);
+    const maximo = Number(mantenimiento.maxHoras || 15);
+    if (totalActual + horas > maximo) {
+      return `No se puede guardar: la orden va en ${totalActual}/${maximo} horas y no puede pasar de ${maximo}.`;
+    }
+
+    setMantenimientos((actuales) => actuales.map((item) => {
+      if (item.id !== id) return item;
+      const registrosHoras = [
+        ...(item.registrosHoras || []),
+        {
+          id: Math.max(0, ...(item.registrosHoras || []).map((registro) => registro.id)) + 1,
+          fecha: data.fecha || new Date().toISOString().slice(0, 10),
+          horas,
+          descripcion: data.descripcion,
+          evidencia: data.evidencia || '',
+          usuario: item.tecnico
+        }
+      ];
+      const evidencias = data.evidencia && !item.evidencias.includes(data.evidencia)
+        ? [...item.evidencias, data.evidencia]
+        : item.evidencias;
+      return {
+        ...item,
+        registrosHoras,
+        evidencias,
+        estado: item.estado === 'Pendiente' ? 'En proceso' : item.estado,
+        fechaInicio: item.fechaInicio || new Date().toISOString().slice(0, 10)
+      };
+    }));
+
+    return `Horas registradas. Avance actualizado a ${totalActual + horas}/${maximo}.`;
+  }
+
+  function finalizarOrden(id) {
+    const mantenimiento = mantenimientos.find((item) => item.id === id);
+    if (!mantenimiento) return 'Orden no encontrada.';
+    if (['Finalizada', 'Cancelada', 'Validado'].includes(mantenimiento.estado)) {
+      return 'La orden ya estaba cerrada.';
+    }
+
+    setMantenimientos((actuales) => actuales.map((item) => (
+      item.id === id
+        ? { ...item, estado: 'Finalizada', fechaFin: new Date().toISOString().slice(0, 10) }
+        : item
+    )));
+
+    return 'Orden finalizada correctamente.';
+  }
+
   function atenderAlerta(id) {
     setAlertas((actuales) => actuales.map((item) => (
       item.id === id ? { ...item, estado: 'Atendida' } : item
@@ -686,6 +928,8 @@ function AppShell() {
         onSelect={setMantenimientoSeleccionado}
         onVerificarEpp={verificarEpp}
         onEnviarRevision={enviarRevision}
+        onRegistrarHoras={registrarHoras}
+        onFinalizarOrden={finalizarOrden}
       />
     ),
     alertas: <AlertasView alertas={alertas} onAtender={atenderAlerta} />,
@@ -717,7 +961,11 @@ function AppShell() {
 
 function Root() {
   const { usuario } = useAuth();
-  return usuario ? <AppShell /> : <Login />;
+  if (!usuario) return <Login />;
+  if (usuario.debe_cambiar_contrasena || usuario.must_change_password) {
+    return <CambioContrasenaObligatorio />;
+  }
+  return <AppShell />;
 }
 
 export default function App() {
