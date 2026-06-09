@@ -6,10 +6,10 @@ INSERT INTO roles (nombre_rol, descripcion) VALUES
 ON CONFLICT (nombre_rol) DO NOTHING;
 
 INSERT INTO usuarios (id_rol, nombre_completo, correo, usuario, contrasena) VALUES
-((SELECT id_rol FROM roles WHERE nombre_rol = 'Administrador'), 'Georgean Reyes', 'admin@rickysafe.local', 'admin', crypt('admin123', gen_salt('bf'))),
-((SELECT id_rol FROM roles WHERE nombre_rol = 'Supervisor'), 'Supervisor de Seguridad', 'supervisor@rickysafe.local', 'supervisor', crypt('admin123', gen_salt('bf'))),
-((SELECT id_rol FROM roles WHERE nombre_rol = 'Tecnico'), 'Tecnico de Mantenimiento', 'tecnico@rickysafe.local', 'tecnico', crypt('admin123', gen_salt('bf'))),
-((SELECT id_rol FROM roles WHERE nombre_rol = 'Auditor'), 'Auditor Interno', 'auditor@rickysafe.local', 'auditor', crypt('admin123', gen_salt('bf')))
+((SELECT id_rol FROM roles WHERE nombre_rol = 'Administrador'), 'Georgean Reyes', 'admin@rickysafe.local', 'admin', '$2a$10$eJ5QuE/fBCDOA26Xae.3xej3/nV1eWUCB2hIJIsnfGGLzu9aaifPm'),
+((SELECT id_rol FROM roles WHERE nombre_rol = 'Supervisor'), 'Supervisor de Seguridad', 'supervisor@rickysafe.local', 'supervisor', '$2a$10$eJ5QuE/fBCDOA26Xae.3xej3/nV1eWUCB2hIJIsnfGGLzu9aaifPm'),
+((SELECT id_rol FROM roles WHERE nombre_rol = 'Tecnico'), 'Tecnico de Mantenimiento', 'tecnico@rickysafe.local', 'tecnico', '$2a$10$eJ5QuE/fBCDOA26Xae.3xej3/nV1eWUCB2hIJIsnfGGLzu9aaifPm'),
+((SELECT id_rol FROM roles WHERE nombre_rol = 'Auditor'), 'Auditor Interno', 'auditor@rickysafe.local', 'auditor', '$2a$10$eJ5QuE/fBCDOA26Xae.3xej3/nV1eWUCB2hIJIsnfGGLzu9aaifPm')
 ON CONFLICT (correo) DO NOTHING;
 
 UPDATE usuarios
@@ -17,6 +17,7 @@ SET
     debe_cambiar_contrasena = FALSE,
     must_change_password = FALSE,
     temporary_password = FALSE,
+    contrasena = '$2a$10$eJ5QuE/fBCDOA26Xae.3xej3/nV1eWUCB2hIJIsnfGGLzu9aaifPm',
     password_updated_at = COALESCE(password_updated_at, fecha_cambio_contrasena),
     departamento = CASE correo
         WHEN 'admin@rickysafe.local' THEN 'Administracion'

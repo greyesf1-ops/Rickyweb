@@ -46,11 +46,16 @@ async function hashPassword(password) {
 }
 
 async function verificarPassword(hash, password) {
-  if (hash?.startsWith('$argon2')) {
-    return argon2.verify(hash, password);
-  }
+  try {
+    if (hash?.startsWith('$argon2')) {
+      return argon2.verify(hash, password);
+    }
 
-  return bcrypt.compare(password, hash);
+    return bcrypt.compare(password || '', hash || '');
+  } catch (error) {
+    console.error('Error verificando contraseña:', error.message);
+    return false;
+  }
 }
 
 async function obtenerMantenimientos(filtros = {}) {
@@ -207,12 +212,16 @@ app.post('/api/auth/login', async (req, res, next) => {
 
     const debeCambiar = usuario.must_change_password === true || usuario.debe_cambiar_contrasena === true;
 
-    await registrarAuditoria({
-      idUsuario: usuario.id_usuario,
-      accion: 'Inicio de sesion',
-      modulo: 'Autenticacion',
-      descripcion: `Ingreso de ${usuario.correo}`
-    });
+    try {
+      await registrarAuditoria({
+        idUsuario: usuario.id_usuario,
+        accion: 'Inicio de sesion',
+        modulo: 'Autenticacion',
+        descripcion: `Ingreso de ${usuario.correo}`
+      });
+    } catch (auditError) {
+      console.error('No se pudo registrar auditoria de login:', auditError.message);
+    }
 
     return res.json({
       token: crearToken(usuario),
