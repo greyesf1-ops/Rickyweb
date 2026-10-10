@@ -1,0 +1,22 @@
+import api from './api';
+
+export const listarOrdenes = (params) => api.get('/ordenes-mantenimiento', { params });
+export const crearOrden = (payload) => api.post('/ordenes-mantenimiento', payload);
+export const asignarOrden = (id, payload) => api.post(`/ordenes-mantenimiento/${id}/asignar`, payload);
+export const iniciarOrden = (id, payload = {}) => api.post(`/ordenes-mantenimiento/${id}/iniciar`, payload);
+export const cancelarOrden = (id, reason) => api.post(`/ordenes-mantenimiento/${id}/cancelar`, { reason });
+export const finalizarOrden = (id, observations) => api.put(`/ordenes-mantenimiento/${id}/finalizar`, { observations });
+export const listarChecklistOrden = (id) => api.get(`/ordenes-mantenimiento/${id}/checklist`);
+export const completarChecklist = (id, checkId, completed) => api.put(`/ordenes-mantenimiento/${id}/checklist/${checkId}`, { completed });
+export const listarHistorialOrden = (id) => api.get(`/ordenes-mantenimiento/${id}/historial`);
+export const listarEvidenciasOrden = (id) => api.get(`/ordenes-mantenimiento/${id}/evidencias`);
+export const subirEvidenciaOrden = (id, form) => api.post(`/ordenes-mantenimiento/${id}/evidencias`, form);
+export const verificarEppOrden = (id, payload) => api.put(`/ordenes-mantenimiento/${id}/epp`, payload);
+export const listarHorasOrden = (id) => api.get(`/ordenes-mantenimiento/${id}/horas`);
+export const registrarHorasOrden = (id, payload) => api.post(`/ordenes-mantenimiento/${id}/horas`, payload);
+export const listarRepuestosOrden = (id) => api.get(`/ordenes-mantenimiento/${id}/repuestos`);
+export const registrarRepuestoOrden = (id, payload) => api.post(`/ordenes-mantenimiento/${id}/repuestos`, payload);
+export const listarProgramaciones = () => api.get('/programaciones');
+export const crearProgramacion = (payload) => api.post('/programaciones', payload);
+export const procesarProgramaciones = () => api.post('/programaciones/procesar');
+export const cambiarEstadoProgramacion = (id, active) => api.patch(`/programaciones/${id}/estado`, { active });

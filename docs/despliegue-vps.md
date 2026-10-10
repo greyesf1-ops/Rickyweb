@@ -110,6 +110,8 @@ http://IP_DE_LA_VPS
 
 ### 7. Actualizar despues de un cambio
 
+El workflow de GitHub publica automáticamente cuando se integra un cambio en `main`. Las ramas de trabajo, incluida `readme/rickysafe-end-to-end`, no despliegan por sí solas. Para actualizar manualmente la VPS:
+
 ```bash
 cd /opt/rickysafe
 git pull origin main
@@ -125,9 +127,9 @@ sudo docker compose -p rickysafe logs -f web
 sudo docker compose -p rickysafe logs -f db
 ```
 
-## GitHub Actions para despliegue manual
+## GitHub Actions para despliegue automático y manual
 
-El workflow `.github/workflows/deploy-vps.yml` queda manual para que no falle antes de configurar secrets.
+El workflow `.github/workflows/deploy-vps.yml` se ejecuta con cada push a `main` y también permite iniciar una ejecución manual desde GitHub Actions. La ejecución manual despliega `main`; configúralo solo después de verificar los secrets y respaldos.
 
 Agrega estos secrets en GitHub:
 

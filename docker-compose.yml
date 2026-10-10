@@ -6,7 +6,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-rickysafe_db}
       POSTGRES_USER: ${POSTGRES_USER:-rickysafe_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cambia_esta_contrasena}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Define POSTGRES_PASSWORD en .env}
     volumes:
       - rickysafe_pgdata:/var/lib/postgresql/data
       - ./database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
@@ -25,17 +25,19 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3001
+      TRUST_PROXY: 1
       DB_HOST: db
       DB_PORT: 5432
       DB_NAME: ${POSTGRES_DB:-rickysafe_db}
       DB_USER: ${POSTGRES_USER:-rickysafe_user}
-      DB_PASSWORD: ${POSTGRES_PASSWORD:-cambia_esta_contrasena}
-      JWT_SECRET: ${JWT_SECRET:-cambia_esta_clave_larga}
-      UPLOAD_PATH: src/uploads/evidencias
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?Define POSTGRES_PASSWORD en .env}
+      JWT_SECRET: ${JWT_SECRET:?Define JWT_SECRET en .env (minimo 32 caracteres)}
+      UPLOAD_PATH: /app/src/uploads/evidencias
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
     volumes:
       - rickysafe_evidencias:/app/src/uploads/evidencias
       - ./database:/app/database:ro
-    command: sh -c "node src/migrate.js || true; npm start"
+    command: sh -c "node src/migrate.js && npm start"
     depends_on:
       db:
         condition: service_healthy

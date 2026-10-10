@@ -13,14 +13,13 @@ async function ejecutarArchivo(ruta) {
 }
 
 async function main() {
-  const databaseDir = path.resolve(__dirname, '..', 'database');
+  const databaseDir = [
+    path.resolve(__dirname, '..', 'database'),
+    path.resolve(__dirname, '..', '..', 'database')
+  ].find((candidate) => fs.existsSync(path.join(candidate, 'schema.sql')));
+  if (!databaseDir) throw new Error('No se encontró database/schema.sql en la instalación');
   const schemaPath = path.join(databaseDir, 'schema.sql');
   const seedPath = path.join(databaseDir, 'seed.sql');
-
-  if (!fs.existsSync(schemaPath)) {
-    console.log('Migracion omitida: no se encontro database/schema.sql');
-    return;
-  }
 
   console.log('Aplicando schema.sql...');
   await ejecutarArchivo(schemaPath);

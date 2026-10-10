@@ -1,9 +1,9 @@
 import { Home, LogOut, Menu } from 'lucide-react';
 
-export default function Navbar({ usuario, onLogout, onMenuClick, onHome }) {
+export default function Navbar({ usuario, titulo, onLogout, onMenuClick, onHome }) {
   return (
     <header className="flex items-center justify-between border-b border-slate-200 bg-white px-6 py-4">
-      <div className="flex items-center gap-3">
+      <div className="flex min-w-0 items-center gap-2 sm:gap-3">
         <button
           type="button"
           aria-label="Abrir menu"
@@ -14,7 +14,7 @@ export default function Navbar({ usuario, onLogout, onMenuClick, onHome }) {
         </button>
         <div>
           <p className="text-sm text-slate-500">Sistema de seguridad industrial</p>
-          <h2 className="text-xl font-bold text-slate-900">Panel de mantenimiento</h2>
+          <h2 className="truncate text-lg font-bold text-slate-900 sm:text-xl">{titulo || 'Panel de mantenimiento'}</h2>
         </div>
       </div>
 
@@ -22,12 +22,13 @@ export default function Navbar({ usuario, onLogout, onMenuClick, onHome }) {
         <button
           type="button"
           onClick={onHome}
-          className="inline-flex items-center gap-2 rounded-lg border border-cyan-200 bg-cyan-50 px-3 py-2 text-sm font-semibold text-cyan-800"
+          aria-label="Ir a inicio"
+          className="hidden min-h-10 items-center gap-2 rounded-lg border border-cyan-200 bg-cyan-50 px-3 py-2 text-sm font-semibold text-cyan-800 sm:inline-flex"
         >
           <Home size={16} />
           Inicio
         </button>
-        <span className="rounded bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700">
+        <span className="hidden rounded bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700 sm:inline-block">
           {usuario?.rol || 'Administrador'}
         </span>
         <button

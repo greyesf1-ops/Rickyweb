@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
-    "check": "node --check src/server.js"
+    "check": "node --check src/server.js && node --check src/app.js",
+    "test": "node --test",
+    "migrate": "node src/migrate.js"
   },
   "dependencies": {
     "argon2": "^0.41.1",

@@ -6,7 +6,7 @@ Este README es especifico del backend. La guia principal del proyecto esta en `.
 
 ## Configuracion
 
-1. Copiar `.env.example` como `.env`.
+1. Copiar `.env.example` como `.env` y sustituir `JWT_SECRET` por una clave aleatoria de al menos 32 caracteres (`openssl rand -hex 32`).
 2. Crear la base `rickysafe_db`.
 3. Ejecutar `database/schema.sql`.
 4. Ejecutar `database/seed.sql`.
@@ -17,16 +17,19 @@ Este README es especifico del backend. La guia principal del proyecto esta en `.
 
 ```text
 PORT=3001
+TRUST_PROXY=0
 DB_HOST=localhost
 DB_PORT=5432
 DB_NAME=rickysafe_db
 DB_USER=postgres
 DB_PASSWORD=tu_contrasena
-JWT_SECRET=clave_larga_y_segura
+JWT_SECRET=REEMPLAZA_POR_UNA_CLAVE_ALEATORIA_DE_32_CARACTERES_O_MAS
 UPLOAD_PATH=src/uploads/evidencias
 ```
 
-En produccion cambia `JWT_SECRET` y la contraseña de PostgreSQL antes de iniciar PM2.
+En producción configura un `JWT_SECRET` aleatorio de al menos 32 caracteres, distinto de los marcadores de ejemplo, y una contraseña de PostgreSQL robusta antes de iniciar PM2. El servidor aborta si se usa un secreto JWT débil o de ejemplo.
+
+El endpoint de login está limitado a 10 solicitudes por IP en 15 minutos por instancia. Activa `TRUST_PROXY=1` si el backend está detrás de un único proxy confiable. En despliegues con varias réplicas, añade un limitador compartido. Las evidencias se descargan con autenticación desde `/api/evidencias/:id/archivo`; ya no se sirven como archivos públicos.
 
 ## Endpoints base
 

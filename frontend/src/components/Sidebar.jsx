@@ -1,32 +1,33 @@
 const items = [
   { id: 'dashboard', label: 'Inicio' },
-  { id: 'usuarios', label: 'Usuarios' },
-  { id: 'inventario', label: 'Inventario' },
-  { id: 'mantenimientos', label: 'Mantenimientos' },
-  { id: 'alertas', label: 'Alertas' },
-  { id: 'validaciones', label: 'Validaciones' },
-  { id: 'reportes', label: 'Reportes' },
-  { id: 'auditoria', label: 'Auditoria' }
+  { id: 'orders', label: 'Órdenes y programación' },
+  { id: 'equipment', label: 'Equipos' },
+  { id: 'inventory', label: 'Inventario' },
+  { id: 'users', label: 'Usuarios', roles: ['Administrador', 'Auditor'] },
+  { id: 'alerts', label: 'Alertas', roles: ['Administrador', 'Supervisor', 'Auditor'] },
+  { id: 'reports', label: 'Reportes', roles: ['Administrador', 'Supervisor', 'Auditor'] },
+  { id: 'audit', label: 'Auditoría', roles: ['Administrador', 'Auditor'] }
 ];
 
-export default function Sidebar({ abierto, activo, onChange, onClose }) {
+export default function Sidebar({ abierto, activo, usuario, onChange, onClose }) {
+  const visibles = items.filter((item) => !item.roles || item.roles.includes(usuario?.rol));
   return (
     <>
       <button
         type="button"
         aria-label="Cerrar menu"
         onClick={onClose}
-        className={`fixed inset-0 z-30 bg-slate-950/40 transition-opacity ${abierto ? 'opacity-100' : 'pointer-events-none opacity-0'}`}
+        className={`fixed inset-0 z-30 bg-slate-950/40 transition-opacity md:hidden ${abierto ? 'opacity-100' : 'pointer-events-none opacity-0'}`}
       />
 
-      <aside className={`fixed bottom-0 left-0 top-0 z-40 flex w-72 max-w-[86vw] flex-col bg-brand-navy px-4 py-5 text-white shadow-2xl transition-transform ${abierto ? 'translate-x-0' : '-translate-x-full'}`}>
+      <aside className={`fixed bottom-0 left-0 top-0 z-40 flex w-72 max-w-[86vw] flex-col bg-brand-navy px-4 py-5 text-white shadow-2xl transition-transform md:sticky md:top-0 md:h-screen md:max-w-none md:shrink-0 md:translate-x-0 md:shadow-none ${abierto ? 'translate-x-0' : '-translate-x-full'}`}>
         <div className="mb-8 border-b border-white/15 px-2 pb-5">
           <p className="text-xs font-bold uppercase text-cyan-200">Rickylandia</p>
           <h1 className="text-2xl font-bold">RickySafe</h1>
         </div>
 
         <nav className="space-y-2">
-          {items.map(({ id, label }) => (
+          {visibles.map(({ id, label }) => (
             <button
               key={id}
               type="button"

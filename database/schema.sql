@@ -38,6 +38,7 @@ ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS fecha_cambio_contrasena TIMESTAMP;
 ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN DEFAULT FALSE;
 ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS temporary_password BOOLEAN DEFAULT FALSE;
 ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS password_updated_at TIMESTAMP;
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS costo_hora NUMERIC(10,2) NOT NULL DEFAULT 0 CHECK (costo_hora >= 0);
 
 UPDATE usuarios
 SET must_change_password = debe_cambiar_contrasena
@@ -137,6 +138,82 @@ CREATE TABLE IF NOT EXISTS maintenance_orders (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+ALTER TABLE maintenance_orders ADD COLUMN IF NOT EXISTS schedule_id INT;
+ALTER TABLE maintenance_orders ADD COLUMN IF NOT EXISTS scheduled_for DATE;
+ALTER TABLE maintenance_orders ADD COLUMN IF NOT EXISTS epp_verified BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE maintenance_orders ADD COLUMN IF NOT EXISTS epp_observations TEXT;
+ALTER TABLE maintenance_orders ADD COLUMN IF NOT EXISTS epp_verified_by INT REFERENCES usuarios(id_usuario) ON DELETE SET NULL;
+ALTER TABLE maintenance_orders ADD COLUMN IF NOT EXISTS epp_verified_at TIMESTAMP;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_maintenance_orders_schedule_date
+    ON maintenance_orders(schedule_id, scheduled_for) WHERE schedule_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS maintenance_order_history (
+    id BIGSERIAL PRIMARY KEY,
+    order_id INT NOT NULL REFERENCES maintenance_orders(id),
+    actor_id INT REFERENCES usuarios(id_usuario) ON DELETE SET NULL,
+    action VARCHAR(40) NOT NULL,
+    from_status VARCHAR(40),
+    to_status VARCHAR(40),
+    reason TEXT,
+    event_date TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_maintenance_order_history_order_date
+    ON maintenance_order_history(order_id, event_date DESC);
+
+CREATE TABLE IF NOT EXISTS maintenance_order_checklist (
+    id BIGSERIAL PRIMARY KEY,
+    order_id INT NOT NULL REFERENCES maintenance_orders(id),
+    description TEXT NOT NULL,
+    required BOOLEAN NOT NULL DEFAULT TRUE,
+    completed BOOLEAN NOT NULL DEFAULT FALSE,
+    completed_by INT REFERENCES usuarios(id_usuario) ON DELETE SET NULL,
+    completed_at TIMESTAMP,
+    UNIQUE(order_id, description)
+);
+
+CREATE TABLE IF NOT EXISTS maintenance_order_evidence (
+    id BIGSERIAL PRIMARY KEY,
+    order_id INT NOT NULL REFERENCES maintenance_orders(id),
+    uploaded_by INT REFERENCES usuarios(id_usuario) ON DELETE SET NULL,
+    original_name VARCHAR(255) NOT NULL,
+    file_path TEXT NOT NULL,
+    mime_type VARCHAR(100),
+    description TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_maintenance_order_evidence_order ON maintenance_order_evidence(order_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS maintenance_schedules (
+    id SERIAL PRIMARY KEY,
+    id_juego INT NOT NULL REFERENCES juegos(id_juego),
+    assigned_to INT REFERENCES usuarios(id_usuario) ON DELETE SET NULL,
+    title VARCHAR(150) NOT NULL,
+    description TEXT NOT NULL,
+    priority VARCHAR(30) NOT NULL DEFAULT 'Media',
+    interval_days INT NOT NULL CHECK (interval_days BETWEEN 1 AND 3650),
+    next_due DATE NOT NULL,
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_by INT REFERENCES usuarios(id_usuario) ON DELETE SET NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'fk_maintenance_orders_schedule'
+    ) THEN
+        ALTER TABLE maintenance_orders
+            ADD CONSTRAINT fk_maintenance_orders_schedule
+            FOREIGN KEY (schedule_id) REFERENCES maintenance_schedules(id) ON DELETE SET NULL;
+    END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_maintenance_schedules_due
+    ON maintenance_schedules(next_due) WHERE active = TRUE;
+
 CREATE TABLE IF NOT EXISTS maintenance_work_logs (
     id SERIAL PRIMARY KEY,
     order_id INT NOT NULL REFERENCES maintenance_orders(id) ON DELETE CASCADE,
@@ -148,6 +225,8 @@ CREATE TABLE IF NOT EXISTS maintenance_work_logs (
     evidence VARCHAR(255),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+ALTER TABLE maintenance_work_logs ADD COLUMN IF NOT EXISTS hourly_rate NUMERIC(10,2) NOT NULL DEFAULT 0 CHECK (hourly_rate >= 0);
 
 CREATE TABLE IF NOT EXISTS checklist_mantenimiento (
     id_checklist SERIAL PRIMARY KEY,
@@ -186,6 +265,37 @@ CREATE TABLE IF NOT EXISTS inventario_repuestos (
     fecha_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+ALTER TABLE inventario_repuestos ADD COLUMN IF NOT EXISTS costo_unitario NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (costo_unitario >= 0);
+
+CREATE TABLE IF NOT EXISTS maintenance_order_parts (
+    id BIGSERIAL PRIMARY KEY,
+    order_id INT NOT NULL REFERENCES maintenance_orders(id),
+    part_id INT NOT NULL REFERENCES inventario_repuestos(id_repuesto),
+    user_id INT REFERENCES usuarios(id_usuario) ON DELETE SET NULL,
+    quantity NUMERIC(12,2) NOT NULL CHECK (quantity > 0),
+    unit_cost NUMERIC(12,2) NOT NULL CHECK (unit_cost >= 0),
+    reason TEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_maintenance_order_parts_order ON maintenance_order_parts(order_id);
+
+CREATE TABLE IF NOT EXISTS inventory_movements (
+    id BIGSERIAL PRIMARY KEY,
+    part_id INT NOT NULL REFERENCES inventario_repuestos(id_repuesto),
+    order_id INT REFERENCES maintenance_orders(id),
+    actor_id INT REFERENCES usuarios(id_usuario) ON DELETE SET NULL,
+    movement_type VARCHAR(20) NOT NULL CHECK (movement_type IN ('Entrada', 'Salida', 'Ajuste')),
+    quantity NUMERIC(12,2) NOT NULL CHECK (quantity >= 0),
+    stock_before NUMERIC(12,2) NOT NULL CHECK (stock_before >= 0),
+    stock_after NUMERIC(12,2) NOT NULL CHECK (stock_after >= 0),
+    unit_cost NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (unit_cost >= 0),
+    reason TEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_inventory_movements_part_date ON inventory_movements(part_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS repuestos_mantenimiento (
     id_repuesto_mantenimiento SERIAL PRIMARY KEY,
     id_mantenimiento INT NOT NULL REFERENCES mantenimientos(id_mantenimiento) ON DELETE CASCADE,
@@ -196,6 +306,8 @@ CREATE TABLE IF NOT EXISTS repuestos_mantenimiento (
     observaciones TEXT,
     fecha_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+ALTER TABLE repuestos_mantenimiento ADD COLUMN IF NOT EXISTS costo_unitario NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (costo_unitario >= 0);
 
 CREATE TABLE IF NOT EXISTS alertas_seguridad (
     id_alerta SERIAL PRIMARY KEY,

@@ -1,6 +1,8 @@
 require('dotenv').config();
 
 const path = require('path');
+const crypto = require('crypto');
+const fs = require('fs/promises');
 const express = require('express');
 const cors = require('cors');
 const argon2 = require('argon2');
@@ -11,13 +13,22 @@ const db = require('./config/database');
 const { autenticar } = require('./middlewares/auth.middleware');
 const { permitirRoles } = require('./middlewares/roles.middleware');
 const { upload } = require('./middlewares/upload.middleware');
+const { crearLimitadorLogin } = require('./middlewares/login-rate-limit.middleware');
 const { registrarAuditoria } = require('./services/auditoria.service');
+const { ESTADOS, transicionValida, paginacion } = require('./services/order-workflow.service');
 
 const app = express();
+app.set('trust proxy', process.env.TRUST_PROXY === '1' ? 1 : false);
 
-app.use(cors());
-app.use(express.json());
-app.use('/uploads/evidencias', express.static(path.join(__dirname, 'uploads/evidencias')));
+const origenesPermitidos = (process.env.CORS_ORIGINS || 'http://localhost:5173,http://127.0.0.1:5173')
+  .split(',').map((origen) => origen.trim()).filter(Boolean);
+app.use(cors({
+  origin(origen, callback) {
+    if (!origen || origenesPermitidos.includes(origen)) return callback(null, true);
+    return callback(new Error('Origen no permitido por CORS'));
+  }
+}));
+app.use(express.json({ limit: '1mb' }));
 
 function crearToken(usuario) {
   return jwt.sign(
@@ -27,13 +38,13 @@ function crearToken(usuario) {
       correo: usuario.correo,
       rol: usuario.nombre_rol
     },
-    process.env.JWT_SECRET || 'rickysafe_dev_secret',
+    process.env.JWT_SECRET,
     { expiresIn: '8h' }
   );
 }
 
 function generarContrasenaTemporal() {
-  const numero = Math.floor(100000 + Math.random() * 900000);
+  const numero = crypto.randomInt(100000, 1000000);
   return `Ricky#${numero}Tmp`;
 }
 
@@ -117,20 +128,8 @@ function crearCodigo(prefijo) {
     String(fecha.getMinutes()).padStart(2, '0'),
     String(fecha.getSeconds()).padStart(2, '0')
   ].join('');
-  const aleatorio = Math.floor(100 + Math.random() * 900);
+  const aleatorio = crypto.randomBytes(4).toString('hex').toUpperCase();
   return `${prefijo}-${stamp}-${aleatorio}`;
-}
-
-function obtenerUsuarioRespaldo(identificador, contrasena) {
-  if (contrasena !== 'admin123') return null;
-  const usuarios = [
-    { id_usuario: 1, nombre_completo: 'Georgean Reyes', correo: 'admin@rickysafe.local', usuario: 'admin', nombre_rol: 'Administrador' },
-    { id_usuario: 2, nombre_completo: 'Supervisor de Seguridad', correo: 'supervisor@rickysafe.local', usuario: 'supervisor', nombre_rol: 'Supervisor' },
-    { id_usuario: 3, nombre_completo: 'Tecnico de Mantenimiento', correo: 'tecnico@rickysafe.local', usuario: 'tecnico', nombre_rol: 'Tecnico' },
-    { id_usuario: 4, nombre_completo: 'Auditor Interno', correo: 'auditor@rickysafe.local', usuario: 'auditor', nombre_rol: 'Auditor' }
-  ];
-  const normalizado = String(identificador || '').toLowerCase();
-  return usuarios.find((usuario) => usuario.correo === normalizado || usuario.usuario === normalizado) || null;
 }
 
 function normalizarHoras(valor) {
@@ -138,7 +137,15 @@ function normalizarHoras(valor) {
   return Number.isFinite(horas) ? Math.round(horas * 100) / 100 : 0;
 }
 
-async function obtenerOrdenes(filtros = {}) {
+async function registrarHistorialOrden(client, { orderId, actorId, action, fromStatus = null, toStatus = null, reason = null }) {
+  await client.query(
+    `INSERT INTO maintenance_order_history (order_id, actor_id, action, from_status, to_status, reason)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [orderId, actorId, action, fromStatus, toStatus, reason]
+  );
+}
+
+async function obtenerOrdenes(filtros = {}, { paginate = false } = {}) {
   const condiciones = [];
   const valores = [];
 
@@ -167,7 +174,23 @@ async function obtenerOrdenes(filtros = {}) {
     condiciones.push(`DATE(o.created_at) <= $${valores.length}`);
   }
 
+  if (filtros.q) {
+    valores.push(`%${String(filtros.q).trim()}%`);
+    condiciones.push(`(o.order_code ILIKE $${valores.length} OR o.description ILIKE $${valores.length} OR j.nombre_juego ILIKE $${valores.length} OR u.nombre_completo ILIKE $${valores.length})`);
+  }
+
   const where = condiciones.length ? `WHERE ${condiciones.join(' AND ')}` : '';
+  const ordenPermitido = {
+    fecha: 'o.created_at',
+    prioridad: 'o.priority',
+    estado: 'o.status',
+    codigo: 'o.order_code'
+  };
+  const orden = ordenPermitido[filtros.sort] || 'o.created_at';
+  const direccion = String(filtros.direction).toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+  const pag = paginate ? paginacion(filtros) : null;
+  const values = [...valores];
+  const pagSql = pag ? `LIMIT $${values.push(pag.pageSize)} OFFSET $${values.push(pag.offset)}` : '';
 
   const { rows } = await db.query(
     `SELECT
@@ -177,7 +200,9 @@ async function obtenerOrdenes(filtros = {}) {
        j.nombre_juego,
        u.nombre_completo AS responsable,
        COALESCE(SUM(w.hours_worked), 0)::numeric(5,2) AS horas_trabajadas,
-       GREATEST(o.max_hours - COALESCE(SUM(w.hours_worked), 0), 0)::numeric(5,2) AS horas_restantes
+       GREATEST(o.max_hours - COALESCE(SUM(w.hours_worked), 0), 0)::numeric(5,2) AS horas_restantes,
+       COALESCE((SELECT SUM(wl.hours_worked * wl.hourly_rate) FROM maintenance_work_logs wl WHERE wl.order_id = o.id), 0)::numeric(12,2) AS costo_mano_obra,
+       COALESCE((SELECT SUM(op.quantity * op.unit_cost) FROM maintenance_order_parts op WHERE op.order_id = o.id), 0)::numeric(12,2) AS costo_repuestos
      FROM maintenance_orders o
      LEFT JOIN maintenance_requests r ON r.id = o.request_id
      LEFT JOIN juegos j ON j.id_juego = o.id_juego
@@ -185,19 +210,62 @@ async function obtenerOrdenes(filtros = {}) {
      LEFT JOIN maintenance_work_logs w ON w.order_id = o.id
      ${where}
      GROUP BY o.id, r.id, j.id_juego, u.id_usuario
-     ORDER BY o.created_at DESC`,
-    valores
+     ORDER BY ${orden} ${direccion}, o.id DESC ${pagSql}`,
+    values
   );
 
-  return rows;
+  if (!pag) return rows;
+  const totalResult = await db.query(
+    `SELECT COUNT(DISTINCT o.id)::int AS total
+     FROM maintenance_orders o
+     LEFT JOIN juegos j ON j.id_juego = o.id_juego
+     LEFT JOIN usuarios u ON u.id_usuario = o.assigned_to
+     ${where}`,
+    valores
+  );
+  const total = totalResult.rows[0].total;
+  return { items: rows, total, page: pag.page, pageSize: pag.pageSize, totalPages: Math.ceil(total / pag.pageSize) };
 }
 
 app.get('/api/salud', (_req, res) => {
   res.json({ estado: 'ok', sistema: 'RickySafe Maintenance' });
 });
 
-app.post('/api/auth/login', async (req, res, next) => {
-  const { correo, contrasena } = req.body;
+app.get('/api/dashboard', autenticar, async (_req, res, next) => {
+  try {
+    const [states, stock, due, costs, recent] = await Promise.all([
+      db.query('SELECT status, COUNT(*)::int AS total FROM maintenance_orders GROUP BY status'),
+      db.query('SELECT COUNT(*)::int AS total FROM inventario_repuestos WHERE estado = TRUE AND stock_actual <= stock_minimo'),
+      db.query('SELECT COUNT(*)::int AS total FROM maintenance_schedules WHERE active = TRUE AND next_due <= CURRENT_DATE + INTERVAL \'7 days\''),
+      db.query(
+        `SELECT (COALESCE((SELECT SUM(w.hours_worked * w.hourly_rate) FROM maintenance_work_logs w), 0)
+              + COALESCE((SELECT SUM(p.quantity * p.unit_cost) FROM maintenance_order_parts p), 0))::numeric(14,2) AS total`
+      ),
+      db.query(
+        `SELECT o.id, o.order_code, o.status, o.priority, o.created_at, j.nombre_juego, u.nombre_completo AS responsable
+         FROM maintenance_orders o LEFT JOIN juegos j ON j.id_juego = o.id_juego
+         LEFT JOIN usuarios u ON u.id_usuario = o.assigned_to ORDER BY o.created_at DESC LIMIT 6`
+      )
+    ]);
+    const counts = Object.fromEntries(states.rows.map((row) => [row.status, row.total]));
+    return res.json({
+      ordenes: { total: states.rows.reduce((sum, row) => sum + row.total, 0), por_estado: counts },
+      repuestos_bajo_minimo: stock.rows[0].total,
+      programaciones_vencen_7_dias: due.rows[0].total,
+      costo_historico: costs.rows[0].total,
+      recientes: recent.rows
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post('/api/auth/login', crearLimitadorLogin(), async (req, res, next) => {
+  const { correo, contrasena } = req.body || {};
+
+  if (typeof correo !== 'string' || typeof contrasena !== 'string' || !correo.trim() || !contrasena) {
+    return res.status(400).json({ mensaje: 'Correo/usuario y contraseña son obligatorios' });
+  }
 
   try {
     const { rows } = await db.query(
@@ -210,7 +278,7 @@ app.post('/api/auth/login', async (req, res, next) => {
 
     const usuario = rows[0];
     if (!usuario) {
-      return res.status(404).json({ mensaje: 'Usuario no encontrado' });
+      return res.status(401).json({ mensaje: 'Credenciales incorrectas' });
     }
 
     if (!usuario.estado) {
@@ -218,24 +286,7 @@ app.post('/api/auth/login', async (req, res, next) => {
     }
 
     const valido = await verificarPassword(usuario.contrasena, contrasena);
-    if (!valido) {
-      const usuarioRespaldo = obtenerUsuarioRespaldo(correo, contrasena);
-      if (usuarioRespaldo && usuarioRespaldo.correo === usuario.correo) {
-        return res.json({
-          token: crearToken(usuarioRespaldo),
-          usuario: {
-            id_usuario: usuarioRespaldo.id_usuario,
-            nombre_completo: usuarioRespaldo.nombre_completo,
-            correo: usuarioRespaldo.correo,
-            rol: usuarioRespaldo.nombre_rol,
-            debe_cambiar_contrasena: false,
-            must_change_password: false,
-            temporary_password: false
-          }
-        });
-      }
-      return res.status(401).json({ mensaje: 'Contraseña incorrecta' });
-    }
+    if (!valido) return res.status(401).json({ mensaje: 'Credenciales incorrectas' });
 
     const debeCambiar = usuario.must_change_password === true || usuario.debe_cambiar_contrasena === true;
 
@@ -264,21 +315,6 @@ app.post('/api/auth/login', async (req, res, next) => {
     });
   } catch (error) {
     console.error('Fallo login DB:', error.message);
-    const usuarioRespaldo = obtenerUsuarioRespaldo(correo, contrasena);
-    if (usuarioRespaldo) {
-      return res.json({
-        token: crearToken(usuarioRespaldo),
-        usuario: {
-          id_usuario: usuarioRespaldo.id_usuario,
-          nombre_completo: usuarioRespaldo.nombre_completo,
-          correo: usuarioRespaldo.correo,
-          rol: usuarioRespaldo.nombre_rol,
-          debe_cambiar_contrasena: false,
-          must_change_password: false,
-          temporary_password: false
-        }
-      });
-    }
     return next(error);
   }
 });
@@ -287,20 +323,43 @@ app.get('/api/auth/perfil', autenticar, (req, res) => {
   res.json({ usuario: req.usuario });
 });
 
-app.get('/api/usuarios', autenticar, permitirRoles('Administrador', 'Auditor'), async (_req, res, next) => {
+app.get('/api/usuarios', autenticar, permitirRoles('Administrador', 'Supervisor', 'Auditor'), async (req, res, next) => {
   try {
     const { rows } = await db.query(
       `SELECT u.id_usuario, u.nombre_completo, u.correo, u.usuario,
               u.departamento, u.turno, u.telefono, u.ultimo_acceso, u.estado,
               u.debe_cambiar_contrasena, u.must_change_password, u.temporary_password,
-              u.password_updated_at, u.fecha_creacion, r.nombre_rol AS rol
+              u.password_updated_at, u.fecha_creacion, r.nombre_rol AS rol,
+              CASE WHEN $1 = 'Administrador' THEN u.costo_hora END AS costo_hora
        FROM usuarios u
        JOIN roles r ON r.id_rol = u.id_rol
-       ORDER BY u.fecha_creacion DESC`
+       ORDER BY u.fecha_creacion DESC`, [req.usuario.rol]
     );
     res.json(rows);
   } catch (error) {
     next(error);
+  }
+});
+
+app.get('/api/roles', autenticar, permitirRoles('Administrador'), async (_req, res, next) => {
+  try {
+    const { rows } = await db.query('SELECT id_rol, nombre_rol FROM roles WHERE estado = TRUE ORDER BY id_rol');
+    return res.json(rows);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.patch('/api/usuarios/:id/costo-hora', autenticar, permitirRoles('Administrador'), async (req, res, next) => {
+  try {
+    const rate = Number(req.body.costo_hora);
+    if (!Number.isFinite(rate) || rate < 0) return res.status(400).json({ mensaje: 'El costo por hora debe ser un valor no negativo' });
+    const { rows } = await db.query('UPDATE usuarios SET costo_hora = $1, fecha_actualizacion = CURRENT_TIMESTAMP WHERE id_usuario = $2 RETURNING id_usuario, costo_hora', [rate, req.params.id]);
+    if (!rows[0]) return res.status(404).json({ mensaje: 'Usuario no encontrado' });
+    await registrarAuditoria({ idUsuario: req.usuario.id_usuario, accion: 'Costo laboral actualizado', modulo: 'Usuarios', descripcion: `Usuario ${rows[0].id_usuario}` });
+    return res.json(rows[0]);
+  } catch (error) {
+    return next(error);
   }
 });
 
@@ -314,19 +373,22 @@ app.post('/api/usuarios', autenticar, permitirRoles('Administrador'), async (req
       contrasena_temporal,
       departamento,
       turno,
-      telefono
+      telefono,
+      costo_hora
     } = req.body;
+    const costoHora = Number(costo_hora || 0);
+    if (!Number.isFinite(costoHora) || costoHora < 0) return res.status(400).json({ mensaje: 'El costo por hora debe ser un valor no negativo' });
     const temporal = contrasena_temporal || generarContrasenaTemporal();
     const hash = await hashPassword(temporal);
 
     const { rows } = await db.query(
       `INSERT INTO usuarios
        (id_rol, nombre_completo, correo, usuario, contrasena, debe_cambiar_contrasena,
-        must_change_password, temporary_password, departamento, turno, telefono)
-       VALUES ($1, $2, $3, $4, $5, TRUE, TRUE, TRUE, $6, $7, $8)
+        must_change_password, temporary_password, departamento, turno, telefono, costo_hora)
+       VALUES ($1, $2, $3, $4, $5, TRUE, TRUE, TRUE, $6, $7, $8, $9)
        RETURNING id_usuario, nombre_completo, correo, usuario, estado,
-                 debe_cambiar_contrasena, must_change_password, temporary_password, fecha_creacion`,
-      [id_rol, nombre_completo, correo, usuario, hash, departamento || null, turno || null, telefono || null]
+                 debe_cambiar_contrasena, must_change_password, temporary_password, costo_hora, fecha_creacion`,
+      [id_rol, nombre_completo, correo, usuario, hash, departamento || null, turno || null, telefono || null, costoHora]
     );
 
     await registrarAuditoria({
@@ -429,6 +491,45 @@ app.get('/api/juegos', autenticar, async (_req, res, next) => {
     res.json(rows);
   } catch (error) {
     next(error);
+  }
+});
+
+app.get('/api/juegos/:id/resumen', autenticar, async (req, res, next) => {
+  try {
+    const equipment = await db.query('SELECT * FROM juegos WHERE id_juego = $1', [req.params.id]);
+    if (!equipment.rows[0]) return res.status(404).json({ mensaje: 'Equipo no encontrado' });
+    const [orders, schedules, totals] = await Promise.all([
+      db.query(
+        `SELECT o.id, o.order_code, o.status, o.priority, o.description, o.start_date, o.end_date, o.scheduled_for,
+                u.nombre_completo AS responsable,
+                COALESCE((SELECT SUM(w.hours_worked * w.hourly_rate) FROM maintenance_work_logs w WHERE w.order_id = o.id), 0)::numeric(12,2) AS costo_mano_obra,
+                COALESCE((SELECT SUM(p.quantity * p.unit_cost) FROM maintenance_order_parts p WHERE p.order_id = o.id), 0)::numeric(12,2) AS costo_repuestos
+         FROM maintenance_orders o LEFT JOIN usuarios u ON u.id_usuario = o.assigned_to
+         WHERE o.id_juego = $1 ORDER BY o.created_at DESC LIMIT 100`, [req.params.id]
+      ),
+      db.query('SELECT id, title, interval_days, next_due, active FROM maintenance_schedules WHERE id_juego = $1 ORDER BY active DESC, next_due', [req.params.id]),
+      db.query(
+        `SELECT COALESCE(SUM(w.hours_worked * w.hourly_rate), 0)::numeric(12,2) AS costo_mano_obra,
+                COALESCE((SELECT SUM(p.quantity * p.unit_cost) FROM maintenance_order_parts p JOIN maintenance_orders o ON o.id = p.order_id WHERE o.id_juego = $1), 0)::numeric(12,2) AS costo_repuestos
+         FROM maintenance_work_logs w JOIN maintenance_orders o ON o.id = w.order_id WHERE o.id_juego = $1`, [req.params.id]
+      )
+    ]);
+    return res.json({ equipo: equipment.rows[0], ordenes: orders.rows, programaciones: schedules.rows, costos: totals.rows[0] });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.patch('/api/juegos/:id/estado', autenticar, permitirRoles('Administrador'), async (req, res, next) => {
+  try {
+    const allowed = ['Activo', 'Fuera de servicio', 'Inactivo'];
+    if (!allowed.includes(req.body.estado_operativo)) return res.status(400).json({ mensaje: 'Estado de equipo no válido' });
+    const { rows } = await db.query('UPDATE juegos SET estado_operativo = $1 WHERE id_juego = $2 RETURNING *', [req.body.estado_operativo, req.params.id]);
+    if (!rows[0]) return res.status(404).json({ mensaje: 'Equipo no encontrado' });
+    await registrarAuditoria({ idUsuario: req.usuario.id_usuario, accion: 'Estado del equipo actualizado', modulo: 'Juegos', descripcion: `${rows[0].codigo_juego}: ${rows[0].estado_operativo}` });
+    return res.json(rows[0]);
+  } catch (error) {
+    return next(error);
   }
 });
 
@@ -570,9 +671,9 @@ app.post('/api/solicitudes-mantenimiento', autenticar, async (req, res, next) =>
 });
 
 app.post('/api/solicitudes-mantenimiento/:id/generar-orden', autenticar, permitirRoles('Administrador', 'Supervisor'), async (req, res, next) => {
-  const client = await db.pool.connect();
-
+  let client;
   try {
+    client = await db.pool.connect();
     const { assigned_to, observations } = req.body;
     await client.query('BEGIN');
 
@@ -583,12 +684,12 @@ app.post('/api/solicitudes-mantenimiento/:id/generar-orden', autenticar, permiti
     const solicitud = solicitudResult.rows[0];
 
     if (!solicitud) {
-      await client.query('ROLLBACK');
+      await client?.query('ROLLBACK').catch(() => {});
       return res.status(404).json({ mensaje: 'Solicitud no encontrada' });
     }
 
     if (solicitud.status === 'Convertida') {
-      await client.query('ROLLBACK');
+      await client?.query('ROLLBACK').catch(() => {});
       return res.status(400).json({ mensaje: 'La solicitud ya fue convertida en orden' });
     }
 
@@ -608,6 +709,22 @@ app.post('/api/solicitudes-mantenimiento/:id/generar-orden', autenticar, permiti
       ]
     );
 
+    const checklistBase = [
+      'Confirmar aislamiento y señalización del equipo',
+      'Verificar EPP requerido antes de intervenir',
+      'Registrar resultado y evidencia del trabajo'
+    ];
+    for (const description of checklistBase) {
+      await client.query('INSERT INTO maintenance_order_checklist (order_id, description) VALUES ($1, $2) ON CONFLICT DO NOTHING', [ordenResult.rows[0].id, description]);
+    }
+    await registrarHistorialOrden(client, {
+      orderId: ordenResult.rows[0].id,
+      actorId: req.usuario.id_usuario,
+      action: 'Creada',
+      toStatus: ordenResult.rows[0].status,
+      reason: `Creada desde solicitud ${solicitud.code}`
+    });
+
     await client.query(
       `UPDATE maintenance_requests
        SET status = 'Convertida', updated_at = CURRENT_TIMESTAMP
@@ -626,23 +743,25 @@ app.post('/api/solicitudes-mantenimiento/:id/generar-orden', autenticar, permiti
 
     return res.status(201).json(ordenResult.rows[0]);
   } catch (error) {
-    await client.query('ROLLBACK');
+    await client?.query('ROLLBACK').catch(() => {});
     return next(error);
   } finally {
-    client.release();
+    client?.release();
   }
 });
 
 app.get('/api/ordenes-mantenimiento', autenticar, async (req, res, next) => {
   try {
-    res.json(await obtenerOrdenes(req.query));
+    res.json(await obtenerOrdenes(req.query, { paginate: true }));
   } catch (error) {
     next(error);
   }
 });
 
 app.post('/api/ordenes-mantenimiento', autenticar, permitirRoles('Administrador', 'Supervisor'), async (req, res, next) => {
+  let client;
   try {
+    client = await db.pool.connect();
     const {
       id_juego,
       assigned_to,
@@ -656,7 +775,8 @@ app.post('/api/ordenes-mantenimiento', autenticar, permitirRoles('Administrador'
       return res.status(400).json({ mensaje: 'La descripcion de la orden es obligatoria' });
     }
 
-    const { rows } = await db.query(
+    await client.query('BEGIN');
+    const { rows } = await client.query(
       `INSERT INTO maintenance_orders
        (order_code, id_juego, assigned_to, status, priority, description, observations, start_date)
        VALUES ($1, $2, $3, 'Pendiente', COALESCE($4, 'Media'), $5, $6, $7)
@@ -664,13 +784,38 @@ app.post('/api/ordenes-mantenimiento', autenticar, permitirRoles('Administrador'
       [
         crearCodigo('ORD'),
         id_juego || null,
-        assigned_to || req.usuario.id_usuario,
+        assigned_to || null,
         priority,
         description,
         observations || null,
         start_date || null
       ]
     );
+
+    const orden = rows[0];
+    const checklist = Array.isArray(req.body.checklist) && req.body.checklist.length
+      ? req.body.checklist
+      : [
+          'Confirmar aislamiento y señalización del equipo',
+          'Verificar EPP requerido antes de intervenir',
+          'Registrar resultado y evidencia del trabajo'
+        ];
+    for (const item of checklist) {
+      const descriptionItem = String(typeof item === 'string' ? item : item.description || '').trim();
+      if (!descriptionItem) continue;
+      await client.query(
+        'INSERT INTO maintenance_order_checklist (order_id, description, required) VALUES ($1, $2, $3) ON CONFLICT (order_id, description) DO NOTHING',
+        [orden.id, descriptionItem, typeof item === 'string' ? true : item.required !== false]
+      );
+    }
+    await registrarHistorialOrden(client, {
+      orderId: orden.id,
+      actorId: req.usuario.id_usuario,
+      action: 'Creada',
+      toStatus: orden.status,
+      reason: 'Orden registrada'
+    });
+    await client.query('COMMIT');
 
     await registrarAuditoria({
       idUsuario: req.usuario.id_usuario,
@@ -679,18 +824,397 @@ app.post('/api/ordenes-mantenimiento', autenticar, permitirRoles('Administrador'
       descripcion: rows[0].order_code
     });
 
+    return res.status(201).json({ ...orden, checklist });
+  } catch (error) {
+    await client?.query('ROLLBACK').catch(() => {});
+    return next(error);
+  } finally {
+    client?.release();
+  }
+});
+
+app.get('/api/ordenes-mantenimiento/:id/historial', autenticar, async (req, res, next) => {
+  try {
+    const { rows } = await db.query(
+      `SELECT h.*, u.nombre_completo AS responsable
+       FROM maintenance_order_history h
+       LEFT JOIN usuarios u ON u.id_usuario = h.actor_id
+       WHERE h.order_id = $1 ORDER BY h.event_date DESC, h.id DESC`,
+      [req.params.id]
+    );
+    return res.json(rows);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post('/api/ordenes-mantenimiento/:id/asignar', autenticar, permitirRoles('Administrador', 'Supervisor'), async (req, res, next) => {
+  let client;
+  try {
+    client = await db.pool.connect();
+    const assignedTo = Number(req.body.assigned_to);
+    if (!Number.isInteger(assignedTo) || assignedTo <= 0) return res.status(400).json({ mensaje: 'Selecciona un responsable válido' });
+    await client.query('BEGIN');
+    const before = await client.query('SELECT * FROM maintenance_orders WHERE id = $1 FOR UPDATE', [req.params.id]);
+    if (!before.rows[0]) {
+      await client?.query('ROLLBACK').catch(() => {});
+      return res.status(404).json({ mensaje: 'Orden no encontrada' });
+    }
+    if ([ESTADOS.FINALIZADA, ESTADOS.CANCELADA].includes(before.rows[0].status)) {
+      await client?.query('ROLLBACK').catch(() => {});
+      return res.status(409).json({ mensaje: 'No se puede reasignar una orden cerrada' });
+    }
+    const assigned = await client.query('SELECT id_usuario FROM usuarios WHERE id_usuario = $1 AND estado = TRUE', [assignedTo]);
+    if (!assigned.rows[0]) {
+      await client?.query('ROLLBACK').catch(() => {});
+      return res.status(400).json({ mensaje: 'El responsable no existe o está desactivado' });
+    }
+    const { rows } = await client.query('UPDATE maintenance_orders SET assigned_to = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING *', [assignedTo, req.params.id]);
+    await registrarHistorialOrden(client, { orderId: rows[0].id, actorId: req.usuario.id_usuario, action: 'Asignada', fromStatus: rows[0].status, toStatus: rows[0].status, reason: String(req.body.reason || 'Cambio de responsable').trim() });
+    await client.query('COMMIT');
+    await registrarAuditoria({ idUsuario: req.usuario.id_usuario, accion: 'Orden reasignada', modulo: 'Mantenimientos', descripcion: `${rows[0].order_code} -> usuario ${assignedTo}` });
+    return res.json(rows[0]);
+  } catch (error) {
+    await client?.query('ROLLBACK').catch(() => {});
+    return next(error);
+  } finally {
+    client?.release();
+  }
+});
+
+app.post('/api/ordenes-mantenimiento/:id/iniciar', autenticar, permitirRoles('Administrador', 'Tecnico', 'Supervisor'), async (req, res, next) => {
+  let client;
+  try {
+    client = await db.pool.connect();
+    await client.query('BEGIN');
+    const current = await client.query('SELECT * FROM maintenance_orders WHERE id = $1 FOR UPDATE', [req.params.id]);
+    if (!current.rows[0]) {
+      await client?.query('ROLLBACK').catch(() => {});
+      return res.status(404).json({ mensaje: 'Orden no encontrada' });
+    }
+    const order = current.rows[0];
+    if (!transicionValida(order.status, ESTADOS.PROCESO)) {
+      await client?.query('ROLLBACK').catch(() => {});
+      return res.status(409).json({ mensaje: `No se puede iniciar una orden en estado ${order.status}` });
+    }
+    if (!order.epp_verified) {
+      await client?.query('ROLLBACK').catch(() => {});
+      return res.status(409).json({ mensaje: 'Verifica el EPP y adjunta evidencia antes de iniciar el trabajo' });
+    }
+    if (req.usuario.rol === 'Tecnico' && Number(order.assigned_to) !== Number(req.usuario.id_usuario)) {
+      await client?.query('ROLLBACK').catch(() => {});
+      return res.status(403).json({ mensaje: 'Solo el responsable asignado puede iniciar esta orden' });
+    }
+    const { rows } = await client.query(
+      `UPDATE maintenance_orders SET status = $1, start_date = COALESCE(start_date, CURRENT_TIMESTAMP), updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2 RETURNING *`, [ESTADOS.PROCESO, order.id]
+    );
+    await registrarHistorialOrden(client, { orderId: order.id, actorId: req.usuario.id_usuario, action: 'Estado', fromStatus: order.status, toStatus: ESTADOS.PROCESO, reason: String(req.body.reason || 'Trabajo iniciado').trim() });
+    await client.query('COMMIT');
+    await registrarAuditoria({ idUsuario: req.usuario.id_usuario, accion: 'Orden iniciada', modulo: 'Mantenimientos', descripcion: rows[0].order_code });
+    return res.json(rows[0]);
+  } catch (error) {
+    await client?.query('ROLLBACK').catch(() => {});
+    return next(error);
+  } finally {
+    client?.release();
+  }
+});
+
+app.post('/api/ordenes-mantenimiento/:id/cancelar', autenticar, permitirRoles('Administrador', 'Supervisor'), async (req, res, next) => {
+  let client;
+  try {
+    client = await db.pool.connect();
+    const reason = String(req.body.reason || '').trim();
+    if (reason.length < 5) return res.status(400).json({ mensaje: 'Indica el motivo de cancelación (mínimo 5 caracteres)' });
+    await client.query('BEGIN');
+    const current = await client.query('SELECT * FROM maintenance_orders WHERE id = $1 FOR UPDATE', [req.params.id]);
+    if (!current.rows[0]) {
+      await client?.query('ROLLBACK').catch(() => {});
+      return res.status(404).json({ mensaje: 'Orden no encontrada' });
+    }
+    const order = current.rows[0];
+    if (!transicionValida(order.status, ESTADOS.CANCELADA)) {
+      await client?.query('ROLLBACK').catch(() => {});
+      return res.status(409).json({ mensaje: `No se puede cancelar una orden en estado ${order.status}` });
+    }
+    const { rows } = await client.query(
+      `UPDATE maintenance_orders SET status = $1, observations = CONCAT_WS(' | ', observations, $2),
+       updated_at = CURRENT_TIMESTAMP WHERE id = $3 RETURNING *`,
+      [ESTADOS.CANCELADA, `Cancelación: ${reason}`, order.id]
+    );
+    await registrarHistorialOrden(client, { orderId: order.id, actorId: req.usuario.id_usuario, action: 'Estado', fromStatus: order.status, toStatus: ESTADOS.CANCELADA, reason });
+    await client.query('COMMIT');
+    await registrarAuditoria({ idUsuario: req.usuario.id_usuario, accion: 'Orden cancelada', modulo: 'Mantenimientos', descripcion: `${rows[0].order_code}: ${reason}` });
+    return res.json(rows[0]);
+  } catch (error) {
+    await client?.query('ROLLBACK').catch(() => {});
+    return next(error);
+  } finally {
+    client?.release();
+  }
+});
+
+app.get('/api/ordenes-mantenimiento/:id/checklist', autenticar, async (req, res, next) => {
+  try {
+    const { rows } = await db.query(
+      `SELECT c.*, u.nombre_completo AS responsable
+       FROM maintenance_order_checklist c LEFT JOIN usuarios u ON u.id_usuario = c.completed_by
+       WHERE c.order_id = $1 ORDER BY c.id`, [req.params.id]
+    );
+    return res.json(rows);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.get('/api/ordenes-mantenimiento/:id/evidencias', autenticar, async (req, res, next) => {
+  try {
+    const { rows } = await db.query(
+      `SELECT e.id, e.order_id, e.uploaded_by, e.original_name, e.mime_type, e.description, e.created_at,
+              u.nombre_completo AS responsable
+       FROM maintenance_order_evidence e LEFT JOIN usuarios u ON u.id_usuario = e.uploaded_by
+       WHERE e.order_id = $1 ORDER BY e.created_at DESC`, [req.params.id]
+    );
+    return res.json(rows.map((row) => ({ ...row, url_descarga: `/api/orden-evidencias/${row.id}/archivo` })));
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post('/api/ordenes-mantenimiento/:id/evidencias', autenticar, permitirRoles('Administrador', 'Tecnico', 'Supervisor'), upload.single('archivo'), async (req, res, next) => {
+  const file = req.file;
+  try {
+    if (!file) return res.status(400).json({ mensaje: 'Selecciona un archivo de evidencia' });
+    const order = await db.query('SELECT id, assigned_to, status FROM maintenance_orders WHERE id = $1', [req.params.id]);
+    if (!order.rows[0]) {
+      await fs.unlink(file.path).catch(() => {});
+      return res.status(404).json({ mensaje: 'Orden no encontrada' });
+    }
+    if (['Finalizada', 'Cancelada'].includes(order.rows[0].status)) {
+      await fs.unlink(file.path).catch(() => {});
+      return res.status(409).json({ mensaje: 'No se pueden adjuntar evidencias a una orden cerrada' });
+    }
+    if (req.usuario.rol === 'Tecnico' && Number(order.rows[0].assigned_to) !== Number(req.usuario.id_usuario)) {
+      await fs.unlink(file.path).catch(() => {});
+      return res.status(403).json({ mensaje: 'Solo el responsable asignado puede cargar evidencia' });
+    }
+    const { rows } = await db.query(
+      `INSERT INTO maintenance_order_evidence (order_id, uploaded_by, original_name, file_path, mime_type, description)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id, order_id, uploaded_by, original_name, mime_type, description, created_at`,
+      [req.params.id, req.usuario.id_usuario, file.originalname, file.path, file.mimetype, req.body.description || null]
+    );
+    await registrarAuditoria({ idUsuario: req.usuario.id_usuario, accion: 'Evidencia adjuntada', modulo: 'Mantenimientos', descripcion: `${order.rows[0].id}: ${file.originalname}` });
+    return res.status(201).json(rows[0]);
+  } catch (error) {
+    if (file) await fs.unlink(file.path).catch(() => {});
+    return next(error);
+  }
+});
+
+app.get('/api/orden-evidencias/:id/archivo', autenticar, async (req, res, next) => {
+  try {
+    const { rows } = await db.query(
+      `SELECT e.file_path, e.original_name, o.assigned_to
+       FROM maintenance_order_evidence e JOIN maintenance_orders o ON o.id = e.order_id
+       WHERE e.id = $1`, [req.params.id]
+    );
+    if (!rows[0]) return res.status(404).json({ mensaje: 'Evidencia no encontrada' });
+    if (req.usuario.rol === 'Tecnico' && Number(rows[0].assigned_to) !== Number(req.usuario.id_usuario)) {
+      return res.status(403).json({ mensaje: 'Solo el responsable asignado puede consultar esta evidencia' });
+    }
+    return res.download(rows[0].file_path, path.basename(rows[0].original_name), (error) => {
+      if (error && !res.headersSent) next(error);
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.put('/api/ordenes-mantenimiento/:id/epp', autenticar, permitirRoles('Administrador', 'Tecnico', 'Supervisor'), async (req, res, next) => {
+  let client;
+  try {
+    client = await db.pool.connect();
+    const verified = req.body.verified === true;
+    const observations = String(req.body.observations || '').trim();
+    await client.query('BEGIN');
+    const orderResult = await client.query('SELECT * FROM maintenance_orders WHERE id = $1 FOR UPDATE', [req.params.id]);
+    const order = orderResult.rows[0];
+    if (!order) {
+      await client?.query('ROLLBACK').catch(() => {});
+      return res.status(404).json({ mensaje: 'Orden no encontrada' });
+    }
+    if (req.usuario.rol === 'Tecnico' && Number(order.assigned_to) !== Number(req.usuario.id_usuario)) {
+      await client?.query('ROLLBACK').catch(() => {});
+      return res.status(403).json({ mensaje: 'Solo el responsable asignado puede validar el EPP' });
+    }
+    if (order.status !== ESTADOS.PENDIENTE && verified !== order.epp_verified) {
+      await client?.query('ROLLBACK').catch(() => {});
+      return res.status(409).json({ mensaje: 'La verificación de EPP ya no se puede cambiar después de iniciar el trabajo' });
+    }
+    if (verified) {
+      const evidence = await client.query('SELECT 1 FROM maintenance_order_evidence WHERE order_id = $1 LIMIT 1', [order.id]);
+      if (!evidence.rows[0]) {
+        await client?.query('ROLLBACK').catch(() => {});
+        return res.status(409).json({ mensaje: 'Adjunta evidencia antes de validar el EPP' });
+      }
+    }
+    const { rows } = await client.query(
+      `UPDATE maintenance_orders SET epp_verified = $1, epp_observations = $2,
+       epp_verified_by = CASE WHEN $1 THEN $3 ELSE NULL END,
+       epp_verified_at = CASE WHEN $1 THEN CURRENT_TIMESTAMP ELSE NULL END,
+       updated_at = CURRENT_TIMESTAMP WHERE id = $4 RETURNING *`,
+      [verified, observations || null, req.usuario.id_usuario, order.id]
+    );
+    await client.query(
+      `UPDATE maintenance_order_checklist SET completed = $1,
+       completed_by = CASE WHEN $1 THEN $2 ELSE NULL END,
+       completed_at = CASE WHEN $1 THEN CURRENT_TIMESTAMP ELSE NULL END
+       WHERE order_id = $3 AND description = 'Verificar EPP requerido antes de intervenir'`,
+      [verified, req.usuario.id_usuario, order.id]
+    );
+    await registrarHistorialOrden(client, { orderId: order.id, actorId: req.usuario.id_usuario, action: verified ? 'EPP verificado' : 'EPP pendiente', fromStatus: order.status, toStatus: order.status, reason: observations || (verified ? 'EPP completo y evidencia adjunta' : 'EPP desmarcado') });
+    await client.query('COMMIT');
+    await registrarAuditoria({ idUsuario: req.usuario.id_usuario, accion: verified ? 'EPP verificado en orden' : 'Verificación EPP retirada', modulo: 'Seguridad EPP', descripcion: order.order_code });
+    return res.json(rows[0]);
+  } catch (error) {
+    await client?.query('ROLLBACK').catch(() => {});
+    return next(error);
+  } finally {
+    client?.release();
+  }
+});
+
+app.put('/api/ordenes-mantenimiento/:id/checklist/:checklistId', autenticar, permitirRoles('Administrador', 'Tecnico', 'Supervisor'), async (req, res, next) => {
+  try {
+    if (typeof req.body.completed !== 'boolean') return res.status(400).json({ mensaje: 'Indica completed como true o false' });
+    const order = await db.query('SELECT assigned_to, status FROM maintenance_orders WHERE id = $1', [req.params.id]);
+    if (!order.rows[0]) return res.status(404).json({ mensaje: 'Orden no encontrada' });
+    if (['Finalizada', 'Cancelada'].includes(order.rows[0].status)) return res.status(409).json({ mensaje: 'No se puede modificar el checklist de una orden cerrada' });
+    if (req.usuario.rol === 'Tecnico' && Number(order.rows[0].assigned_to) !== Number(req.usuario.id_usuario)) {
+      return res.status(403).json({ mensaje: 'Solo el responsable asignado puede completar el checklist' });
+    }
+    const { rows } = await db.query(
+      `UPDATE maintenance_order_checklist SET completed = $1,
+         completed_by = CASE WHEN $1 THEN $2 ELSE NULL END,
+         completed_at = CASE WHEN $1 THEN CURRENT_TIMESTAMP ELSE NULL END
+       WHERE id = $3 AND order_id = $4 RETURNING *`,
+      [req.body.completed, req.usuario.id_usuario, req.params.checklistId, req.params.id]
+    );
+    if (!rows[0]) return res.status(404).json({ mensaje: 'Elemento de checklist no encontrado' });
+    return res.json(rows[0]);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.get('/api/programaciones', autenticar, async (_req, res, next) => {
+  try {
+    const { rows } = await db.query(
+      `SELECT s.*, j.nombre_juego, j.codigo_juego, u.nombre_completo AS responsable
+       FROM maintenance_schedules s JOIN juegos j ON j.id_juego = s.id_juego
+       LEFT JOIN usuarios u ON u.id_usuario = s.assigned_to
+       ORDER BY s.active DESC, s.next_due ASC`
+    );
+    return res.json(rows);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post('/api/programaciones', autenticar, permitirRoles('Administrador', 'Supervisor'), async (req, res, next) => {
+  try {
+    const { id_juego, assigned_to, title, description, priority, interval_days, next_due } = req.body;
+    const days = Number(interval_days);
+    if (!id_juego || !title?.trim() || !description?.trim() || !/^\d{4}-\d{2}-\d{2}$/.test(next_due || '') || !Number.isInteger(days) || days < 1 || days > 3650) {
+      return res.status(400).json({ mensaje: 'Completa equipo, título, descripción, fecha y un intervalo de 1 a 3650 días' });
+    }
+    const { rows } = await db.query(
+      `INSERT INTO maintenance_schedules (id_juego, assigned_to, title, description, priority, interval_days, next_due, created_by)
+       VALUES ($1, $2, $3, $4, COALESCE($5, 'Media'), $6, $7, $8) RETURNING *`,
+      [id_juego, assigned_to || null, title.trim(), description.trim(), priority || 'Media', days, next_due, req.usuario.id_usuario]
+    );
+    await registrarAuditoria({ idUsuario: req.usuario.id_usuario, accion: 'Programación recurrente creada', modulo: 'Mantenimientos', descripcion: rows[0].title });
     return res.status(201).json(rows[0]);
   } catch (error) {
     return next(error);
   }
 });
 
+app.patch('/api/programaciones/:id/estado', autenticar, permitirRoles('Administrador', 'Supervisor'), async (req, res, next) => {
+  try {
+    if (typeof req.body.active !== 'boolean') return res.status(400).json({ mensaje: 'Indica active como true o false' });
+    const { rows } = await db.query(
+      'UPDATE maintenance_schedules SET active = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING *',
+      [req.body.active, req.params.id]
+    );
+    if (!rows[0]) return res.status(404).json({ mensaje: 'Programación no encontrada' });
+    await registrarAuditoria({ idUsuario: req.usuario.id_usuario, accion: req.body.active ? 'Programación activada' : 'Programación pausada', modulo: 'Mantenimientos', descripcion: rows[0].title });
+    return res.json(rows[0]);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post('/api/programaciones/procesar', autenticar, permitirRoles('Administrador', 'Supervisor'), async (req, res, next) => {
+  let client;
+  try {
+    client = await db.pool.connect();
+    await client.query('BEGIN');
+    const { rows: schedules } = await client.query(
+      `SELECT * FROM maintenance_schedules WHERE active = TRUE AND next_due <= CURRENT_DATE
+       ORDER BY next_due FOR UPDATE SKIP LOCKED`
+    );
+    const created = [];
+    const checklistBase = [
+      'Confirmar aislamiento y señalización del equipo',
+      'Verificar EPP requerido antes de intervenir',
+      'Registrar resultado y evidencia del trabajo'
+    ];
+    for (const schedule of schedules) {
+      let due = schedule.next_due;
+      let count = 0;
+      while (new Date(`${due}T00:00:00Z`) <= new Date(new Date().toISOString().slice(0, 10) + 'T00:00:00Z') && count < 100) {
+        const inserted = await client.query(
+          `INSERT INTO maintenance_orders (order_code, id_juego, assigned_to, status, priority, description, schedule_id, scheduled_for)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+           ON CONFLICT (schedule_id, scheduled_for) WHERE schedule_id IS NOT NULL DO NOTHING
+           RETURNING *`,
+          [crearCodigo('ORD'), schedule.id_juego, schedule.assigned_to, ESTADOS.PENDIENTE, schedule.priority, `${schedule.title}: ${schedule.description}`, schedule.id, due]
+        );
+        if (inserted.rows[0]) {
+          for (const description of checklistBase) {
+            await client.query('INSERT INTO maintenance_order_checklist (order_id, description) VALUES ($1, $2) ON CONFLICT DO NOTHING', [inserted.rows[0].id, description]);
+          }
+          await registrarHistorialOrden(client, { orderId: inserted.rows[0].id, actorId: req.usuario.id_usuario, action: 'Creada', toStatus: ESTADOS.PENDIENTE, reason: `Generada por programación recurrente ${schedule.id}; fecha prevista ${due}` });
+          created.push(inserted.rows[0]);
+        }
+        const nextDate = new Date(`${due}T00:00:00Z`);
+        nextDate.setUTCDate(nextDate.getUTCDate() + Number(schedule.interval_days));
+        due = nextDate.toISOString().slice(0, 10);
+        count += 1;
+      }
+      await client.query('UPDATE maintenance_schedules SET next_due = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [due, schedule.id]);
+    }
+    await client.query('COMMIT');
+    await registrarAuditoria({ idUsuario: req.usuario.id_usuario, accion: 'Órdenes recurrentes procesadas', modulo: 'Mantenimientos', descripcion: `${created.length} órdenes generadas` });
+    return res.json({ generadas: created.length, ordenes: created });
+  } catch (error) {
+    await client?.query('ROLLBACK').catch(() => {});
+    return next(error);
+  } finally {
+    client?.release();
+  }
+});
+
 app.get('/api/ordenes-mantenimiento/:id/horas', autenticar, async (req, res, next) => {
   try {
     const { rows } = await db.query(
-      `SELECT w.*, u.nombre_completo AS tecnico
+      `SELECT w.*, u.nombre_completo AS tecnico,
+              (w.hours_worked * w.hourly_rate)::numeric(12,2) AS costo_total
        FROM maintenance_work_logs w
-       JOIN usuarios u ON u.id_usuario = w.user_id
+       LEFT JOIN usuarios u ON u.id_usuario = w.user_id
        WHERE w.order_id = $1
        ORDER BY w.work_date DESC, w.created_at DESC`,
       [req.params.id]
@@ -702,9 +1226,9 @@ app.get('/api/ordenes-mantenimiento/:id/horas', autenticar, async (req, res, nex
 });
 
 app.post('/api/ordenes-mantenimiento/:id/horas', autenticar, permitirRoles('Administrador', 'Tecnico', 'Supervisor'), async (req, res, next) => {
-  const client = await db.pool.connect();
-
+  let client;
   try {
+    client = await db.pool.connect();
     const { work_date, hours_worked, description, progress_status, evidence } = req.body;
     const horas = normalizarHoras(hours_worked);
 
@@ -725,13 +1249,22 @@ app.post('/api/ordenes-mantenimiento/:id/horas', autenticar, permitirRoles('Admi
     const orden = ordenResult.rows[0];
 
     if (!orden) {
-      await client.query('ROLLBACK');
+      await client?.query('ROLLBACK').catch(() => {});
       return res.status(404).json({ mensaje: 'Orden de mantenimiento no encontrada' });
     }
 
     if (['Finalizada', 'Cancelada'].includes(orden.status)) {
-      await client.query('ROLLBACK');
+      await client?.query('ROLLBACK').catch(() => {});
       return res.status(400).json({ mensaje: 'La orden ya no acepta nuevos registros de horas' });
+    }
+
+    if (!orden.epp_verified) {
+      await client?.query('ROLLBACK').catch(() => {});
+      return res.status(409).json({ mensaje: 'Verifica el EPP antes de registrar horas' });
+    }
+    if (req.usuario.rol === 'Tecnico' && Number(orden.assigned_to) !== Number(req.usuario.id_usuario)) {
+      await client?.query('ROLLBACK').catch(() => {});
+      return res.status(403).json({ mensaje: 'Solo el responsable asignado puede registrar horas' });
     }
 
     const horasResult = await client.query(
@@ -741,7 +1274,7 @@ app.post('/api/ordenes-mantenimiento/:id/horas', autenticar, permitirRoles('Admi
     const totalActual = normalizarHoras(horasResult.rows[0].total);
     const maxHoras = normalizarHoras(orden.max_hours || 15);
     if (totalActual + horas > maxHoras) {
-      await client.query('ROLLBACK');
+      await client?.query('ROLLBACK').catch(() => {});
       return res.status(400).json({
         mensaje: `No se pueden registrar ${horas} horas. La orden va en ${totalActual}/${maxHoras} horas.`
       });
@@ -749,8 +1282,9 @@ app.post('/api/ordenes-mantenimiento/:id/horas', autenticar, permitirRoles('Admi
 
     const logResult = await client.query(
       `INSERT INTO maintenance_work_logs
-       (order_id, user_id, work_date, hours_worked, description, progress_status, evidence)
-       VALUES ($1, $2, COALESCE($3, CURRENT_DATE), $4, $5, COALESCE($6, 'En proceso'), $7)
+       (order_id, user_id, work_date, hours_worked, description, progress_status, evidence, hourly_rate)
+       SELECT $1, $2, COALESCE($3, CURRENT_DATE), $4, $5, COALESCE($6, 'En proceso'), $7, costo_hora
+       FROM usuarios WHERE id_usuario = $2
        RETURNING *`,
       [
         orden.id,
@@ -774,6 +1308,10 @@ app.post('/api/ordenes-mantenimiento/:id/horas', autenticar, permitirRoles('Admi
       [nuevoTotal, orden.id]
     );
 
+    if (orden.status === ESTADOS.PENDIENTE) {
+      await registrarHistorialOrden(client, { orderId: orden.id, actorId: req.usuario.id_usuario, action: 'Estado', fromStatus: ESTADOS.PENDIENTE, toStatus: ESTADOS.PROCESO, reason: 'Inicio al registrar horas de trabajo' });
+    }
+
     await client.query('COMMIT');
 
     await registrarAuditoria({
@@ -785,30 +1323,53 @@ app.post('/api/ordenes-mantenimiento/:id/horas', autenticar, permitirRoles('Admi
 
     return res.status(201).json({ ...logResult.rows[0], total_hours: nuevoTotal, max_hours: maxHoras });
   } catch (error) {
-    await client.query('ROLLBACK');
+    await client?.query('ROLLBACK').catch(() => {});
     return next(error);
   } finally {
-    client.release();
+    client?.release();
   }
 });
 
 app.put('/api/ordenes-mantenimiento/:id/finalizar', autenticar, permitirRoles('Administrador', 'Tecnico', 'Supervisor'), async (req, res, next) => {
+  let client;
   try {
-    const { observations } = req.body;
-    const { rows } = await db.query(
-      `UPDATE maintenance_orders
-       SET status = 'Finalizada',
-           end_date = CURRENT_TIMESTAMP,
-           observations = COALESCE($1, observations),
-           updated_at = CURRENT_TIMESTAMP
-       WHERE id = $2 AND status NOT IN ('Finalizada', 'Cancelada')
-       RETURNING *`,
-      [observations || null, req.params.id]
-    );
-
-    if (!rows[0]) {
-      return res.status(404).json({ mensaje: 'Orden no encontrada o ya finalizada' });
+    client = await db.pool.connect();
+    await client.query('BEGIN');
+    const current = await client.query('SELECT * FROM maintenance_orders WHERE id = $1 FOR UPDATE', [req.params.id]);
+    if (!current.rows[0]) {
+      await client?.query('ROLLBACK').catch(() => {});
+      return res.status(404).json({ mensaje: 'Orden no encontrada' });
     }
+    const order = current.rows[0];
+    if (!transicionValida(order.status, ESTADOS.FINALIZADA)) {
+      await client?.query('ROLLBACK').catch(() => {});
+      return res.status(409).json({ mensaje: `No se puede finalizar una orden en estado ${order.status}` });
+    }
+    if (!order.epp_verified) {
+      await client?.query('ROLLBACK').catch(() => {});
+      return res.status(409).json({ mensaje: 'La orden no puede finalizar sin la verificación de EPP' });
+    }
+    if (req.usuario.rol === 'Tecnico' && Number(order.assigned_to) !== Number(req.usuario.id_usuario)) {
+      await client?.query('ROLLBACK').catch(() => {});
+      return res.status(403).json({ mensaje: 'Solo el responsable asignado puede finalizar esta orden' });
+    }
+    const checklist = await client.query(
+      'SELECT COUNT(*)::int AS pendientes FROM maintenance_order_checklist WHERE order_id = $1 AND required = TRUE AND completed = FALSE',
+      [order.id]
+    );
+    if (checklist.rows[0].pendientes > 0) {
+      await client?.query('ROLLBACK').catch(() => {});
+      return res.status(409).json({ mensaje: 'Completa todos los puntos obligatorios del checklist antes de finalizar' });
+    }
+    const observations = String(req.body.observations || '').trim();
+    const { rows } = await client.query(
+      `UPDATE maintenance_orders SET status = $1, end_date = CURRENT_TIMESTAMP,
+       observations = COALESCE(NULLIF($2, ''), observations), updated_at = CURRENT_TIMESTAMP
+       WHERE id = $3 RETURNING *`,
+      [ESTADOS.FINALIZADA, observations, order.id]
+    );
+    await registrarHistorialOrden(client, { orderId: order.id, actorId: req.usuario.id_usuario, action: 'Estado', fromStatus: order.status, toStatus: ESTADOS.FINALIZADA, reason: observations || 'Trabajo completado' });
+    await client.query('COMMIT');
 
     await registrarAuditoria({
       idUsuario: req.usuario.id_usuario,
@@ -819,7 +1380,10 @@ app.put('/api/ordenes-mantenimiento/:id/finalizar', autenticar, permitirRoles('A
 
     return res.json(rows[0]);
   } catch (error) {
+    await client?.query('ROLLBACK').catch(() => {});
     return next(error);
+  } finally {
+    client?.release();
   }
 });
 
@@ -899,12 +1463,13 @@ app.put('/api/checklist/:id', autenticar, permitirRoles('Administrador', 'Tecnic
 app.post('/api/mantenimientos/:id/evidencias', autenticar, upload.single('archivo'), async (req, res, next) => {
   try {
     const archivo = req.file;
+    if (!archivo) return res.status(400).json({ mensaje: 'Selecciona un archivo de evidencia' });
     const { descripcion } = req.body;
 
     const { rows } = await db.query(
       `INSERT INTO evidencias (id_mantenimiento, id_usuario_subio, nombre_archivo, ruta_archivo, tipo_archivo, descripcion)
        VALUES ($1, $2, $3, $4, $5, $6)
-       RETURNING *`,
+       RETURNING id_evidencia, id_mantenimiento, id_usuario_subio, nombre_archivo, tipo_archivo, descripcion, fecha_subida`,
       [req.params.id, req.usuario.id_usuario, archivo.originalname, archivo.path, archivo.mimetype, descripcion || null]
     );
 
@@ -924,12 +1489,28 @@ app.post('/api/mantenimientos/:id/evidencias', autenticar, upload.single('archiv
 app.get('/api/mantenimientos/:id/evidencias', autenticar, async (req, res, next) => {
   try {
     const { rows } = await db.query(
-      'SELECT * FROM evidencias WHERE id_mantenimiento = $1 ORDER BY fecha_subida DESC',
+      `SELECT id_evidencia, id_mantenimiento, id_usuario_subio, nombre_archivo, tipo_archivo, descripcion, fecha_subida
+       FROM evidencias WHERE id_mantenimiento = $1 ORDER BY fecha_subida DESC`,
       [req.params.id]
     );
-    res.json(rows);
+    res.json(rows.map((row) => ({ ...row, url_descarga: `/api/evidencias/${row.id_evidencia}/archivo` })));
   } catch (error) {
     next(error);
+  }
+});
+
+app.get('/api/evidencias/:id/archivo', autenticar, async (req, res, next) => {
+  try {
+    const { rows } = await db.query(
+      'SELECT ruta_archivo, nombre_archivo, tipo_archivo FROM evidencias WHERE id_evidencia = $1',
+      [req.params.id]
+    );
+    if (!rows[0]) return res.status(404).json({ mensaje: 'Evidencia no encontrada' });
+    return res.download(rows[0].ruta_archivo, path.basename(rows[0].nombre_archivo), (error) => {
+      if (error && !res.headersSent) next(error);
+    });
+  } catch (error) {
+    return next(error);
   }
 });
 
@@ -1043,15 +1624,32 @@ app.get('/api/inventario', autenticar, async (_req, res, next) => {
 });
 
 app.post('/api/inventario', autenticar, permitirRoles('Administrador'), async (req, res, next) => {
+  let client;
   try {
-    const { codigo_repuesto, nombre_repuesto, categoria, unidad, stock_actual, stock_minimo, ubicacion } = req.body;
-    const { rows } = await db.query(
+    client = await db.pool.connect();
+    const { codigo_repuesto, nombre_repuesto, categoria, unidad, stock_actual, stock_minimo, ubicacion, costo_unitario } = req.body;
+    const stockInicial = Number(stock_actual || 0);
+    const costo = Number(costo_unitario || 0);
+    if (!codigo_repuesto?.trim() || !nombre_repuesto?.trim() || !Number.isFinite(stockInicial) || stockInicial < 0 || !Number.isFinite(costo) || costo < 0) {
+      return res.status(400).json({ mensaje: 'Código, nombre, existencias y costo deben ser válidos' });
+    }
+    await client.query('BEGIN');
+    const { rows } = await client.query(
       `INSERT INTO inventario_repuestos
-       (codigo_repuesto, nombre_repuesto, categoria, unidad, stock_actual, stock_minimo, ubicacion)
-       VALUES ($1, $2, $3, COALESCE($4, 'Unidad'), COALESCE($5, 0), COALESCE($6, 0), $7)
+       (codigo_repuesto, nombre_repuesto, categoria, unidad, stock_actual, stock_minimo, ubicacion, costo_unitario)
+       VALUES ($1, $2, $3, COALESCE($4, 'Unidad'), $5, COALESCE($6, 0), $7, $8)
        RETURNING *`,
-      [codigo_repuesto, nombre_repuesto, categoria, unidad, stock_actual, stock_minimo, ubicacion]
+      [codigo_repuesto.trim(), nombre_repuesto.trim(), categoria, unidad, stockInicial, stock_minimo, ubicacion, costo]
     );
+
+    if (stockInicial > 0) {
+      await client.query(
+        `INSERT INTO inventory_movements (part_id, actor_id, movement_type, quantity, stock_before, stock_after, unit_cost, reason)
+         VALUES ($1, $2, 'Entrada', $3, 0, $3, $4, 'Existencia inicial al crear repuesto')`,
+        [rows[0].id_repuesto, req.usuario.id_usuario, stockInicial, costo]
+      );
+    }
+    await client.query('COMMIT');
 
     await registrarAuditoria({
       idUsuario: req.usuario.id_usuario,
@@ -1062,25 +1660,78 @@ app.post('/api/inventario', autenticar, permitirRoles('Administrador'), async (r
 
     res.status(201).json(rows[0]);
   } catch (error) {
+    await client?.query('ROLLBACK').catch(() => {});
     next(error);
+  } finally {
+    client?.release();
   }
 });
 
 app.get('/api/inventario/movimientos', autenticar, async (_req, res, next) => {
   try {
     const { rows } = await db.query(
-      `SELECT rm.*, ir.codigo_repuesto, ir.nombre_repuesto, u.nombre_completo AS usuario,
-              j.nombre_juego, m.tipo_mantenimiento
-       FROM repuestos_mantenimiento rm
-       JOIN inventario_repuestos ir ON ir.id_repuesto = rm.id_repuesto
-       JOIN usuarios u ON u.id_usuario = rm.id_usuario
-       JOIN mantenimientos m ON m.id_mantenimiento = rm.id_mantenimiento
-       JOIN juegos j ON j.id_juego = m.id_juego
-       ORDER BY rm.fecha_registro DESC`
+      `SELECT mv.*, ir.codigo_repuesto, ir.nombre_repuesto, u.nombre_completo AS responsable, o.order_code
+       FROM inventory_movements mv JOIN inventario_repuestos ir ON ir.id_repuesto = mv.part_id
+       LEFT JOIN usuarios u ON u.id_usuario = mv.actor_id
+       LEFT JOIN maintenance_orders o ON o.id = mv.order_id
+       ORDER BY mv.created_at DESC LIMIT 500`
     );
     res.json(rows);
   } catch (error) {
     next(error);
+  }
+});
+
+app.post('/api/inventario/:id/movimientos', autenticar, permitirRoles('Administrador', 'Supervisor'), async (req, res, next) => {
+  let client;
+  try {
+    client = await db.pool.connect();
+    const { movement_type: movementType, reason } = req.body;
+    const amount = Number(req.body.quantity);
+    const inputCost = Number(req.body.unit_cost || 0);
+    const reasonText = String(reason || '').trim();
+    if (!['Entrada', 'Salida', 'Ajuste'].includes(movementType) || !Number.isFinite(amount) || amount < 0 || (movementType !== 'Ajuste' && amount === 0) || !reasonText || !Number.isFinite(inputCost) || (movementType === 'Entrada' && inputCost < 0)) {
+      return res.status(400).json({ mensaje: 'Tipo, cantidad y motivo válidos son obligatorios' });
+    }
+    await client.query('BEGIN');
+    const found = await client.query('SELECT * FROM inventario_repuestos WHERE id_repuesto = $1 FOR UPDATE', [req.params.id]);
+    if (!found.rows[0]) {
+      await client?.query('ROLLBACK').catch(() => {});
+      return res.status(404).json({ mensaje: 'Repuesto no encontrado' });
+    }
+    const part = found.rows[0];
+    const before = Number(part.stock_actual);
+    const currentCost = Number(part.costo_unitario || 0);
+    let after = before;
+    let movementQuantity = amount;
+    let cost = currentCost;
+    if (movementType === 'Entrada') {
+      after += amount;
+      cost = after ? ((before * currentCost) + (amount * inputCost)) / after : inputCost;
+    } else if (movementType === 'Salida') {
+      if (amount > before) {
+        await client?.query('ROLLBACK').catch(() => {});
+        return res.status(409).json({ mensaje: 'La salida supera las existencias disponibles' });
+      }
+      after -= amount;
+    } else {
+      after = amount;
+      movementQuantity = Math.abs(after - before);
+    }
+    await client.query('UPDATE inventario_repuestos SET stock_actual = $1, costo_unitario = $2, fecha_actualizacion = CURRENT_TIMESTAMP WHERE id_repuesto = $3', [after, cost, part.id_repuesto]);
+    const { rows } = await client.query(
+      `INSERT INTO inventory_movements (part_id, actor_id, movement_type, quantity, stock_before, stock_after, unit_cost, reason)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+      [part.id_repuesto, req.usuario.id_usuario, movementType, movementQuantity, before, after, movementType === 'Entrada' ? inputCost : currentCost, reasonText]
+    );
+    await client.query('COMMIT');
+    await registrarAuditoria({ idUsuario: req.usuario.id_usuario, accion: `Inventario: ${movementType.toLowerCase()}`, modulo: 'Inventario', descripcion: `${part.codigo_repuesto}, ${before} -> ${after}. ${reasonText}` });
+    return res.status(201).json(rows[0]);
+  } catch (error) {
+    await client?.query('ROLLBACK').catch(() => {});
+    return next(error);
+  } finally {
+    client?.release();
   }
 });
 
@@ -1101,14 +1752,94 @@ app.get('/api/mantenimientos/:id/repuestos', autenticar, async (req, res, next) 
   }
 });
 
-app.post('/api/mantenimientos/:id/repuestos', autenticar, permitirRoles('Administrador', 'Tecnico'), async (req, res, next) => {
-  const client = await db.pool.connect();
-
+app.get('/api/ordenes-mantenimiento/:id/repuestos', autenticar, async (req, res, next) => {
   try {
+    const { rows } = await db.query(
+      `SELECT p.*, i.codigo_repuesto, i.nombre_repuesto, u.nombre_completo AS responsable,
+              (p.quantity * p.unit_cost)::numeric(12,2) AS costo_total
+       FROM maintenance_order_parts p
+       JOIN inventario_repuestos i ON i.id_repuesto = p.part_id
+       LEFT JOIN usuarios u ON u.id_usuario = p.user_id
+       WHERE p.order_id = $1 ORDER BY p.created_at DESC`, [req.params.id]
+    );
+    return res.json(rows);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.post('/api/ordenes-mantenimiento/:id/repuestos', autenticar, permitirRoles('Administrador', 'Supervisor', 'Tecnico'), async (req, res, next) => {
+  let client;
+  try {
+    client = await db.pool.connect();
+    const partId = Number(req.body.part_id);
+    const quantity = Number(req.body.quantity);
+    const reason = String(req.body.reason || '').trim();
+    if (!Number.isInteger(partId) || partId <= 0 || !Number.isFinite(quantity) || quantity <= 0 || reason.length < 4) {
+      return res.status(400).json({ mensaje: 'Selecciona un repuesto, cantidad positiva y motivo (mínimo 4 caracteres)' });
+    }
+    await client.query('BEGIN');
+    const orderResult = await client.query('SELECT * FROM maintenance_orders WHERE id = $1 FOR UPDATE', [req.params.id]);
+    const order = orderResult.rows[0];
+    if (!order) {
+      await client?.query('ROLLBACK').catch(() => {});
+      return res.status(404).json({ mensaje: 'Orden no encontrada' });
+    }
+    if (order.status !== ESTADOS.PROCESO) {
+      await client?.query('ROLLBACK').catch(() => {});
+      return res.status(409).json({ mensaje: 'Los repuestos solo se pueden consumir en órdenes en proceso' });
+    }
+    if (!order.epp_verified) {
+      await client?.query('ROLLBACK').catch(() => {});
+      return res.status(409).json({ mensaje: 'Verifica el EPP antes de consumir repuestos' });
+    }
+    if (req.usuario.rol === 'Tecnico' && Number(order.assigned_to) !== Number(req.usuario.id_usuario)) {
+      await client?.query('ROLLBACK').catch(() => {});
+      return res.status(403).json({ mensaje: 'Solo el responsable asignado puede registrar repuestos' });
+    }
+    const partResult = await client.query('SELECT * FROM inventario_repuestos WHERE id_repuesto = $1 AND estado = TRUE FOR UPDATE', [partId]);
+    const part = partResult.rows[0];
+    if (!part) {
+      await client?.query('ROLLBACK').catch(() => {});
+      return res.status(404).json({ mensaje: 'Repuesto no encontrado o desactivado' });
+    }
+    const before = Number(part.stock_actual);
+    if (quantity > before) {
+      await client?.query('ROLLBACK').catch(() => {});
+      return res.status(409).json({ mensaje: `Stock insuficiente: disponibles ${before}` });
+    }
+    const cost = Number(part.costo_unitario || 0);
+    const after = before - quantity;
+    await client.query('UPDATE inventario_repuestos SET stock_actual = $1, fecha_actualizacion = CURRENT_TIMESTAMP WHERE id_repuesto = $2', [after, partId]);
+    const { rows } = await client.query(
+      `INSERT INTO maintenance_order_parts (order_id, part_id, user_id, quantity, unit_cost, reason)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      [order.id, partId, req.usuario.id_usuario, quantity, cost, reason]
+    );
+    await client.query(
+      `INSERT INTO inventory_movements (part_id, order_id, actor_id, movement_type, quantity, stock_before, stock_after, unit_cost, reason)
+       VALUES ($1, $2, $3, 'Salida', $4, $5, $6, $7, $8)`,
+      [partId, order.id, req.usuario.id_usuario, quantity, before, after, cost, `Orden ${order.order_code}: ${reason}`]
+    );
+    await client.query('COMMIT');
+    await registrarAuditoria({ idUsuario: req.usuario.id_usuario, accion: 'Repuesto consumido en orden', modulo: 'Inventario', descripcion: `${part.codigo_repuesto} x ${quantity}; orden ${order.order_code}` });
+    return res.status(201).json({ ...rows[0], codigo_repuesto: part.codigo_repuesto, nombre_repuesto: part.nombre_repuesto, costo_total: quantity * cost });
+  } catch (error) {
+    await client?.query('ROLLBACK').catch(() => {});
+    return next(error);
+  } finally {
+    client?.release();
+  }
+});
+
+app.post('/api/mantenimientos/:id/repuestos', autenticar, permitirRoles('Administrador', 'Supervisor', 'Tecnico'), async (req, res, next) => {
+  let client;
+  try {
+    client = await db.pool.connect();
     const { id_repuesto, cantidad, evidencia, observaciones } = req.body;
     const cantidadUsada = Number(cantidad || 0);
 
-    if (!id_repuesto || cantidadUsada <= 0) {
+    if (!id_repuesto || !Number.isFinite(cantidadUsada) || cantidadUsada <= 0 || String(observaciones || '').trim().length < 4) {
       return res.status(400).json({ mensaje: 'Repuesto y cantidad son obligatorios' });
     }
 
@@ -1121,14 +1852,17 @@ app.post('/api/mantenimientos/:id/repuestos', autenticar, permitirRoles('Adminis
     const repuesto = repuestoResult.rows[0];
 
     if (!repuesto) {
-      await client.query('ROLLBACK');
+      await client?.query('ROLLBACK').catch(() => {});
       return res.status(404).json({ mensaje: 'Repuesto no encontrado' });
     }
 
     if (Number(repuesto.stock_actual) < cantidadUsada) {
-      await client.query('ROLLBACK');
+      await client?.query('ROLLBACK').catch(() => {});
       return res.status(400).json({ mensaje: 'Stock insuficiente para registrar el cambio' });
     }
+
+    const stockAntes = Number(repuesto.stock_actual);
+    const costoUnitario = Number(repuesto.costo_unitario || 0);
 
     await client.query(
       `UPDATE inventario_repuestos
@@ -1137,12 +1871,18 @@ app.post('/api/mantenimientos/:id/repuestos', autenticar, permitirRoles('Adminis
       [cantidadUsada, id_repuesto]
     );
 
+    await client.query(
+      `INSERT INTO inventory_movements (part_id, actor_id, movement_type, quantity, stock_before, stock_after, unit_cost, reason)
+       VALUES ($1, $2, 'Salida', $3, $4, $5, $6, $7)`,
+      [id_repuesto, req.usuario.id_usuario, cantidadUsada, stockAntes, stockAntes - cantidadUsada, costoUnitario, `Mantenimiento ${req.params.id}: ${String(observaciones).trim()}`]
+    );
+
     const movimientoResult = await client.query(
       `INSERT INTO repuestos_mantenimiento
-       (id_mantenimiento, id_repuesto, id_usuario, cantidad, evidencia, observaciones)
-       VALUES ($1, $2, $3, $4, $5, $6)
+       (id_mantenimiento, id_repuesto, id_usuario, cantidad, evidencia, observaciones, costo_unitario)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING *`,
-      [req.params.id, id_repuesto, req.usuario.id_usuario, cantidadUsada, evidencia || null, observaciones || null]
+      [req.params.id, id_repuesto, req.usuario.id_usuario, cantidadUsada, evidencia || null, observaciones || null, costoUnitario]
     );
 
     await client.query('COMMIT');
@@ -1156,10 +1896,10 @@ app.post('/api/mantenimientos/:id/repuestos', autenticar, permitirRoles('Adminis
 
     return res.status(201).json(movimientoResult.rows[0]);
   } catch (error) {
-    await client.query('ROLLBACK');
+    await client?.query('ROLLBACK').catch(() => {});
     return next(error);
   } finally {
-    client.release();
+    client?.release();
   }
 });
 
@@ -1670,6 +2410,21 @@ app.use((req, res) => {
 
 app.use((error, _req, res, _next) => {
   console.error(error);
+  if (error.type === 'entity.too.large') {
+    return res.status(413).json({ mensaje: 'La solicitud supera el límite de 1 MB' });
+  }
+  if (error.type === 'entity.parse.failed') {
+    return res.status(400).json({ mensaje: 'El cuerpo JSON no es válido' });
+  }
+  if (error.message === 'Origen no permitido por CORS') {
+    return res.status(403).json({ mensaje: 'Origen no autorizado' });
+  }
+  if (error.code === 'LIMIT_FILE_SIZE') {
+    return res.status(413).json({ mensaje: 'El archivo supera el límite de 10 MB' });
+  }
+  if (error.message === 'Tipo de archivo no permitido') {
+    return res.status(415).json({ mensaje: error.message });
+  }
   res.status(500).json({
     mensaje: 'Error interno del servidor',
     detalle: process.env.NODE_ENV === 'production' ? undefined : error.message

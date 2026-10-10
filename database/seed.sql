@@ -5,54 +5,28 @@ INSERT INTO roles (nombre_rol, descripcion) VALUES
 ('Auditor', 'Usuario encargado de consultar historial y reportes')
 ON CONFLICT (nombre_rol) DO NOTHING;
 
-INSERT INTO usuarios (id_rol, nombre_completo, correo, usuario, contrasena) VALUES
-((SELECT id_rol FROM roles WHERE nombre_rol = 'Administrador'), 'Georgean Reyes', 'admin@rickysafe.local', 'admin', '$2a$10$eJ5QuE/fBCDOA26Xae.3xej3/nV1eWUCB2hIJIsnfGGLzu9aaifPm'),
-((SELECT id_rol FROM roles WHERE nombre_rol = 'Supervisor'), 'Supervisor de Seguridad', 'supervisor@rickysafe.local', 'supervisor', '$2a$10$eJ5QuE/fBCDOA26Xae.3xej3/nV1eWUCB2hIJIsnfGGLzu9aaifPm'),
-((SELECT id_rol FROM roles WHERE nombre_rol = 'Tecnico'), 'Tecnico de Mantenimiento', 'tecnico@rickysafe.local', 'tecnico', '$2a$10$eJ5QuE/fBCDOA26Xae.3xej3/nV1eWUCB2hIJIsnfGGLzu9aaifPm'),
-((SELECT id_rol FROM roles WHERE nombre_rol = 'Auditor'), 'Auditor Interno', 'auditor@rickysafe.local', 'auditor', '$2a$10$eJ5QuE/fBCDOA26Xae.3xej3/nV1eWUCB2hIJIsnfGGLzu9aaifPm')
+INSERT INTO usuarios (id_rol, nombre_completo, correo, usuario, contrasena,
+                      debe_cambiar_contrasena, must_change_password, temporary_password) VALUES
+((SELECT id_rol FROM roles WHERE nombre_rol = 'Administrador'), 'Georgean Reyes', 'admin@rickysafe.local', 'admin', '$2a$10$eJ5QuE/fBCDOA26Xae.3xej3/nV1eWUCB2hIJIsnfGGLzu9aaifPm', TRUE, TRUE, TRUE),
+((SELECT id_rol FROM roles WHERE nombre_rol = 'Supervisor'), 'Supervisor de Seguridad', 'supervisor@rickysafe.local', 'supervisor', '$2a$10$eJ5QuE/fBCDOA26Xae.3xej3/nV1eWUCB2hIJIsnfGGLzu9aaifPm', TRUE, TRUE, TRUE),
+((SELECT id_rol FROM roles WHERE nombre_rol = 'Tecnico'), 'Tecnico de Mantenimiento', 'tecnico@rickysafe.local', 'tecnico', '$2a$10$eJ5QuE/fBCDOA26Xae.3xej3/nV1eWUCB2hIJIsnfGGLzu9aaifPm', TRUE, TRUE, TRUE),
+((SELECT id_rol FROM roles WHERE nombre_rol = 'Auditor'), 'Auditor Interno', 'auditor@rickysafe.local', 'auditor', '$2a$10$eJ5QuE/fBCDOA26Xae.3xej3/nV1eWUCB2hIJIsnfGGLzu9aaifPm', TRUE, TRUE, TRUE)
 ON CONFLICT (correo) DO NOTHING;
 
+-- Fuerza cambio solo para cuentas de ejemplo que aún conservan la clave inicial.
+-- No restablece contraseñas ni modifica datos personales ya guardados.
 UPDATE usuarios
 SET
-    debe_cambiar_contrasena = FALSE,
-    must_change_password = FALSE,
-    temporary_password = FALSE,
-    contrasena = '$2a$10$eJ5QuE/fBCDOA26Xae.3xej3/nV1eWUCB2hIJIsnfGGLzu9aaifPm',
-    password_updated_at = COALESCE(password_updated_at, fecha_cambio_contrasena),
-    departamento = CASE correo
-        WHEN 'admin@rickysafe.local' THEN 'Administracion'
-        WHEN 'supervisor@rickysafe.local' THEN 'Seguridad industrial'
-        WHEN 'tecnico@rickysafe.local' THEN 'Mantenimiento'
-        WHEN 'auditor@rickysafe.local' THEN 'Auditoria'
-        ELSE departamento
-    END,
-    turno = CASE correo
-        WHEN 'admin@rickysafe.local' THEN 'Diurno'
-        WHEN 'supervisor@rickysafe.local' THEN 'Mixto'
-        WHEN 'tecnico@rickysafe.local' THEN 'Matutino'
-        WHEN 'auditor@rickysafe.local' THEN 'Diurno'
-        ELSE turno
-    END,
-    telefono = CASE correo
-        WHEN 'admin@rickysafe.local' THEN '5555-0101'
-        WHEN 'supervisor@rickysafe.local' THEN '5555-0202'
-        WHEN 'tecnico@rickysafe.local' THEN '5555-0303'
-        WHEN 'auditor@rickysafe.local' THEN '5555-0404'
-        ELSE telefono
-    END,
-    ultimo_acceso = CASE correo
-        WHEN 'admin@rickysafe.local' THEN '2026-06-07 00:30'::timestamp
-        WHEN 'supervisor@rickysafe.local' THEN '2026-06-06 23:45'::timestamp
-        WHEN 'tecnico@rickysafe.local' THEN '2026-06-06 22:15'::timestamp
-        WHEN 'auditor@rickysafe.local' THEN '2026-06-07 00:25'::timestamp
-        ELSE ultimo_acceso
-    END
+    debe_cambiar_contrasena = TRUE,
+    must_change_password = TRUE,
+    temporary_password = TRUE
 WHERE correo IN (
     'admin@rickysafe.local',
     'supervisor@rickysafe.local',
     'tecnico@rickysafe.local',
     'auditor@rickysafe.local'
-);
+)
+AND contrasena = '$2a$10$eJ5QuE/fBCDOA26Xae.3xej3/nV1eWUCB2hIJIsnfGGLzu9aaifPm';
 
 INSERT INTO alertas_seguridad (id_mantenimiento, id_usuario, destinatario, prioridad, estado, mensaje, fecha_creacion, fecha_atencion)
 SELECT NULL, u.id_usuario, 'Ingeniero de turno', 'Alta', 'Atendida', 'Intento de procedimiento sin verificacion completa de EPP en orden 3.', '2026-06-06 22:00'::timestamp, '2026-06-06 22:15'::timestamp
@@ -76,10 +50,16 @@ INSERT INTO inventario_repuestos (codigo_repuesto, nombre_repuesto, categoria, u
 ('REP-004', 'Tornillo grado 8', 'Fijacion', 'Caja', 3, 5, 'Bodega C')
 ON CONFLICT (codigo_repuesto) DO NOTHING;
 
-INSERT INTO protocolos (nombre_protocolo, descripcion, tipo_mantenimiento, requiere_evidencia, estado) VALUES
-('Protocolo de seguridad para mantenimiento electrico', 'Validacion de seguridad antes de intervenir sistemas electricos', 'Correctivo', TRUE, TRUE),
-('Protocolo de seguridad para mantenimiento preventivo', 'Verificacion general antes, durante y despues del mantenimiento preventivo', 'Preventivo', TRUE, TRUE),
-('Protocolo de seguridad para mantenimiento mecanico', 'Validacion de piezas, estructura, movimiento y seguridad mecanica', 'Periodico', TRUE, TRUE);
+INSERT INTO protocolos (nombre_protocolo, descripcion, tipo_mantenimiento, requiere_evidencia, estado)
+SELECT fuente.nombre_protocolo, fuente.descripcion, fuente.tipo_mantenimiento, fuente.requiere_evidencia, fuente.estado
+FROM (VALUES
+    ('Protocolo de seguridad para mantenimiento electrico', 'Validacion de seguridad antes de intervenir sistemas electricos', 'Correctivo', TRUE, TRUE),
+    ('Protocolo de seguridad para mantenimiento preventivo', 'Verificacion general antes, durante y despues del mantenimiento preventivo', 'Preventivo', TRUE, TRUE),
+    ('Protocolo de seguridad para mantenimiento mecanico', 'Validacion de piezas, estructura, movimiento y seguridad mecanica', 'Periodico', TRUE, TRUE)
+) AS fuente(nombre_protocolo, descripcion, tipo_mantenimiento, requiere_evidencia, estado)
+WHERE NOT EXISTS (
+    SELECT 1 FROM protocolos p WHERE p.nombre_protocolo = fuente.nombre_protocolo
+);
 
 INSERT INTO pasos_protocolo (id_protocolo, descripcion_paso, obligatorio, orden)
 SELECT p.id_protocolo, paso.descripcion, paso.obligatorio, paso.orden

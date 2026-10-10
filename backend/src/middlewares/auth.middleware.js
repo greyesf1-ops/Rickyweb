@@ -1,6 +1,7 @@
 const jwt = require('jsonwebtoken');
 
-function autenticar(req, res, next) {
+function crearAutenticador(db) {
+  return async function autenticar(req, res, next) {
   const header = req.headers.authorization || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : null;
 
@@ -8,13 +9,29 @@ function autenticar(req, res, next) {
     return res.status(401).json({ mensaje: 'Token requerido' });
   }
 
+  if (!process.env.JWT_SECRET) {
+    return res.status(503).json({ mensaje: 'Autenticación no configurada' });
+  }
+  let claims;
   try {
-    req.usuario = jwt.verify(token, process.env.JWT_SECRET || 'rickysafe_dev_secret');
-    return next();
-  } catch (error) {
+    claims = jwt.verify(token, process.env.JWT_SECRET);
+  } catch {
     return res.status(401).json({ mensaje: 'Token invalido' });
   }
+  try {
+    const { rows } = await db.query(
+      `SELECT u.id_usuario, u.nombre_completo, u.correo, u.estado, r.nombre_rol AS rol
+       FROM usuarios u JOIN roles r ON r.id_rol = u.id_rol
+       WHERE u.id_usuario = $1`, [claims.id_usuario]
+    );
+    if (!rows[0] || !rows[0].estado) return res.status(401).json({ mensaje: 'La sesión ya no está activa' });
+    req.usuario = { ...claims, ...rows[0], nombre: rows[0].nombre_completo };
+    return next();
+  } catch (error) {
+    return next(error);
+  }
+  };
 }
 
-module.exports = { autenticar };
-
+const db = require('../config/database');
+module.exports = { autenticar: crearAutenticador(db), crearAutenticador };
