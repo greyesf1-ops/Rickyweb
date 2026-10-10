@@ -939,7 +939,7 @@ app.post('/api/ordenes-mantenimiento/:id/cancelar', autenticar, permitirRoles('A
       return res.status(409).json({ mensaje: `No se puede cancelar una orden en estado ${order.status}` });
     }
     const { rows } = await client.query(
-      `UPDATE maintenance_orders SET status = $1, observations = CONCAT_WS(' | ', observations, $2),
+      `UPDATE maintenance_orders SET status = $1, observations = CONCAT_WS(' | ', observations, $2::text),
        updated_at = CURRENT_TIMESTAMP WHERE id = $3 RETURNING *`,
       [ESTADOS.CANCELADA, `Cancelación: ${reason}`, order.id]
     );
