@@ -120,7 +120,7 @@ test('API completa órdenes, EPP, checklist, inventario, costos y recurrencias c
   const secondProcess = await request('/programaciones/procesar', { method: 'POST', token, headers: { 'Content-Type': 'application/json' }, body: '{}' });
   assert.equal(firstProcess.status, 200, JSON.stringify(firstProcess.data));
   assert.equal(secondProcess.status, 200, JSON.stringify(secondProcess.data));
-  assert.equal(firstProcess.data.generadas + secondProcess.data.generadas, 1);
+  assert.equal(firstProcess.data.generadas + secondProcess.data.generadas, 1, JSON.stringify({ first: firstProcess.data, second: secondProcess.data, schedule: schedule.data }));
 
   const cancelOrder = await request('/ordenes-mantenimiento', {
     method: 'POST', token, headers: { 'Content-Type': 'application/json' },

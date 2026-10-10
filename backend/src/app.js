@@ -1162,8 +1162,10 @@ app.post('/api/programaciones/procesar', autenticar, permitirRoles('Administrado
   try {
     client = await db.pool.connect();
     await client.query('BEGIN');
+    const { rows: [todayRow] } = await client.query('SELECT CURRENT_DATE::text AS today');
     const { rows: schedules } = await client.query(
-      `SELECT * FROM maintenance_schedules WHERE active = TRUE AND next_due <= CURRENT_DATE
+      `SELECT *, TO_CHAR(next_due, 'YYYY-MM-DD') AS next_due_text
+       FROM maintenance_schedules WHERE active = TRUE AND next_due <= CURRENT_DATE
        ORDER BY next_due FOR UPDATE SKIP LOCKED`
     );
     const created = [];
@@ -1173,9 +1175,9 @@ app.post('/api/programaciones/procesar', autenticar, permitirRoles('Administrado
       'Registrar resultado y evidencia del trabajo'
     ];
     for (const schedule of schedules) {
-      let due = schedule.next_due;
+      let due = schedule.next_due_text;
       let count = 0;
-      while (new Date(`${due}T00:00:00Z`) <= new Date(new Date().toISOString().slice(0, 10) + 'T00:00:00Z') && count < 100) {
+      while (due <= todayRow.today && count < 100) {
         const inserted = await client.query(
           `INSERT INTO maintenance_orders (order_code, id_juego, assigned_to, status, priority, description, schedule_id, scheduled_for)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
