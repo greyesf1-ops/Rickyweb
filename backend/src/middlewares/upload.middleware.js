@@ -1,5 +1,6 @@
 const path = require('path');
 const crypto = require('crypto');
+const fs = require('fs/promises');
 const multer = require('multer');
 
 const tiposPermitidos = new Map([
@@ -15,7 +16,7 @@ const destino = path.resolve(process.env.UPLOAD_PATH || path.join(__dirname, '..
 
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => {
-    cb(null, destino);
+    fs.mkdir(destino, { recursive: true }).then(() => cb(null, destino), cb);
   },
   filename: (_req, file, cb) => {
     cb(null, `${crypto.randomUUID()}${path.extname(file.originalname).toLowerCase()}`);
