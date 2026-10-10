@@ -1069,7 +1069,7 @@ app.put('/api/ordenes-mantenimiento/:id/epp', autenticar, permitirRoles('Adminis
     );
     await client.query(
       `UPDATE maintenance_order_checklist SET completed = $1,
-       completed_by = CASE WHEN $1 THEN $2 ELSE NULL END,
+       completed_by = CASE WHEN $1 THEN $2::integer ELSE NULL::integer END,
        completed_at = CASE WHEN $1 THEN CURRENT_TIMESTAMP ELSE NULL END
        WHERE order_id = $3 AND description = 'Verificar EPP requerido antes de intervenir'`,
       [verified, req.usuario.id_usuario, order.id]
@@ -1097,7 +1097,7 @@ app.put('/api/ordenes-mantenimiento/:id/checklist/:checklistId', autenticar, per
     }
     const { rows } = await db.query(
       `UPDATE maintenance_order_checklist SET completed = $1,
-         completed_by = CASE WHEN $1 THEN $2 ELSE NULL END,
+         completed_by = CASE WHEN $1 THEN $2::integer ELSE NULL::integer END,
          completed_at = CASE WHEN $1 THEN CURRENT_TIMESTAMP ELSE NULL END
        WHERE id = $3 AND order_id = $4 RETURNING *`,
       [req.body.completed, req.usuario.id_usuario, req.params.checklistId, req.params.id]
