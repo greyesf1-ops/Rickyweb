@@ -1062,7 +1062,7 @@ app.put('/api/ordenes-mantenimiento/:id/epp', autenticar, permitirRoles('Adminis
     }
     const { rows } = await client.query(
       `UPDATE maintenance_orders SET epp_verified = $1, epp_observations = $2,
-       epp_verified_by = CASE WHEN $1 THEN $3 ELSE NULL END,
+       epp_verified_by = CASE WHEN $1 THEN $3::integer ELSE NULL::integer END,
        epp_verified_at = CASE WHEN $1 THEN CURRENT_TIMESTAMP ELSE NULL END,
        updated_at = CURRENT_TIMESTAMP WHERE id = $4 RETURNING *`,
       [verified, observations || null, req.usuario.id_usuario, order.id]
