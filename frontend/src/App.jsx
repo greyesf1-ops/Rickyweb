@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext.jsx';
 import Sidebar from './components/Sidebar.jsx';
 import Navbar from './components/Navbar.jsx';
@@ -6,6 +6,7 @@ import CardResumen from './components/CardResumen.jsx';
 import BadgeEstado from './components/BadgeEstado.jsx';
 import { consultarAsistente } from './services/asistente.service.js';
 import { login as loginApi } from './services/auth.service.js';
+import api from './services/api.js';
 
 const mantenimientosIniciales = [
   {
@@ -168,8 +169,15 @@ function escaparPdf(valor) {
 function crearPdfSimple(lineas) {
   const contenido = [
     'BT',
+    '0.12 0.32 0.45 rg',
+    '50 805 32 20 re f',
+    '1 1 1 rg',
     '/F1 12 Tf',
+    '60 810 Td',
+    '(R) Tj',
+    '0 0 0 rg',
     '50 790 Td',
+    '/F1 12 Tf',
     ...lineas.slice(0, 34).flatMap((linea, index) => [
       index === 0 ? '' : '0 -20 Td',
       `(${escaparPdf(linea)}) Tj`
@@ -256,17 +264,11 @@ function Login() {
       <div className="pointer-events-none absolute -left-24 -top-24 h-72 w-72 rounded-full bg-brand-teal/20 blur-2xl" />
       <div className="pointer-events-none absolute -bottom-32 -right-16 h-96 w-96 rounded-full bg-brand-coral/20 blur-3xl" />
       <div className="relative grid w-full max-w-5xl overflow-hidden rounded-3xl border border-brand-teal/20 bg-brand-cream/90 shadow-2xl lg:grid-cols-[1.05fr_.95fr]">
-        <section className="hidden bg-gradient-to-br from-brand-navy via-[#35617a] to-brand-teal p-10 text-white lg:flex lg:flex-col lg:justify-between">
+        <section className="hidden bg-gradient-to-br from-brand-navy via-[#35617a] to-brand-teal p-10 text-white lg:flex lg:flex-col lg:justify-center">
           <div>
             <div className="mb-8 flex h-16 w-16 items-center justify-center rounded-2xl bg-brand-coral text-3xl font-black shadow-lg">R</div>
             <p className="text-sm font-bold uppercase tracking-[0.25em] text-teal-100">RickySafe Maintenance</p>
-            <h2 className="mt-5 text-4xl font-black leading-tight">Control seguro para cada mantenimiento.</h2>
-            <p className="mt-5 max-w-md text-base leading-7 text-slate-100">Gestiona EPP, horas trabajadas, evidencias y mantenimientos programados desde un solo lugar.</p>
-          </div>
-          <div className="grid grid-cols-3 gap-3 text-center text-xs font-semibold">
-            <div className="rounded-2xl bg-white/10 p-4">EPP<br /><span className="text-teal-100">verificado</span></div>
-            <div className="rounded-2xl bg-white/10 p-4">Ordenes<br /><span className="text-teal-100">trazables</span></div>
-            <div className="rounded-2xl bg-white/10 p-4">Alertas<br /><span className="text-teal-100">a tiempo</span></div>
+            <h2 className="mt-5 text-4xl font-black leading-tight">Mantenimiento RickySafe</h2>
           </div>
         </section>
         <form onSubmit={submit} className="p-7 sm:p-10">
@@ -276,7 +278,6 @@ function Login() {
           </div>
           <p className="text-sm font-bold uppercase tracking-widest text-brand-teal">Acceso al sistema</p>
           <h1 className="mt-2 text-3xl font-black text-brand-navy">Bienvenido de nuevo</h1>
-          <p className="mt-2 text-sm text-slate-600">Ingresa tus credenciales para continuar con la gestión operativa.</p>
         <label className="mt-6 block text-sm font-semibold text-slate-700">
           Correo o usuario
           <input name="identificador" className="mt-2 w-full rounded border border-slate-300 px-3 py-2" defaultValue="admin@rickysafe.local" />
@@ -483,6 +484,22 @@ function Placeholder({ titulo, descripcion }) {
       <p className="mt-2 max-w-3xl text-slate-600">{descripcion}</p>
     </section>
   );
+}
+
+function AuditoriaView() {
+  const [registros, setRegistros] = useState([]);
+  const [mensaje, setMensaje] = useState('Cargando registros...');
+  async function cargar() {
+    try {
+      const respuesta = await api.get('/auditoria');
+      setRegistros(respuesta.data || []);
+      setMensaje(respuesta.data?.length ? '' : 'No hay registros todavía. Realiza un inicio de sesión o una acción para generar auditoría.');
+    } catch (error) {
+      setMensaje(`No se pudieron cargar los registros: ${error.response?.data?.mensaje || error.message}`);
+    }
+  }
+  useEffect(() => { cargar(); }, []);
+  return <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-xl font-black text-brand-navy">Auditoría</h3><p className="mt-1 text-slate-600">Registro de acciones importantes realizadas dentro del sistema.</p></div><button type="button" onClick={cargar} className="rounded-lg bg-brand-navy px-4 py-2 font-bold text-white">Actualizar</button></div>{mensaje ? <p className="mt-5 rounded-lg bg-slate-50 p-4 text-sm text-slate-700">{mensaje}</p> : <div className="mt-5 overflow-x-auto"><table className="w-full min-w-[720px] text-left text-sm"><thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="px-3 py-2">Fecha</th><th className="px-3 py-2">Usuario</th><th className="px-3 py-2">Acción</th><th className="px-3 py-2">Módulo</th><th className="px-3 py-2">Descripción</th></tr></thead><tbody>{registros.map((item, index) => <tr key={item.id_auditoria || index} className="border-t border-slate-100"><td className="px-3 py-3">{item.fecha_hora || item.created_at || '-'}</td><td className="px-3 py-3">{item.usuario || item.correo || '-'}</td><td className="px-3 py-3 font-semibold">{item.accion || '-'}</td><td className="px-3 py-3">{item.modulo || '-'}</td><td className="px-3 py-3">{item.descripcion || '-'}</td></tr>)}</tbody></table></div>}</section>;
 }
 
 function UsuariosView({ usuarios, usuarioActual, onToggle, onCreate }) {
@@ -878,7 +895,7 @@ function ReportesView({ mantenimientos }) {
       const tabla = [encabezados, ...filas]
         .map((fila) => `<tr>${fila.map((valor) => `<td>${String(valor ?? '')}</td>`).join('')}</tr>`)
         .join('');
-      const excel = `<!doctype html><html><head><meta charset="utf-8" /></head><body><table>${tabla}</table></body></html>`;
+      const excel = `<!doctype html><html><head><meta charset="utf-8" /><style>body{font-family:Arial;color:#243447}h1{color:#30415f}table{border-collapse:collapse}th{background:#d9efeb;color:#243447}td,th{border:1px solid #9fc4bd;padding:8px}</style></head><body><h1>RICKYSAFE</h1><p>Reporte de órdenes de mantenimiento</p><table>${tabla}</table></body></html>`;
       descargarArchivo('rickysafe-reporte.xls', excel, 'application/vnd.ms-excel;charset=utf-8');
     } else {
       const lineas = [
@@ -1153,7 +1170,7 @@ function AppShell() {
     validaciones: <Placeholder titulo="Validaciones" descripcion="Revision por supervisor, aprobacion, rechazo y observaciones obligatorias." />,
     reportes: <ReportesView mantenimientos={mantenimientos} />,
     asistente: <AsistenteView mantenimientos={mantenimientos} alertas={alertas} />,
-    auditoria: <Placeholder titulo="Auditoria" descripcion="Registro de acciones importantes realizadas dentro del sistema." />
+    auditoria: <AuditoriaView />
   };
 
   return (

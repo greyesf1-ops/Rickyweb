@@ -27,7 +27,10 @@ async function generarRespuesta({ tipo, contexto = '' }) {
       max_output_tokens: 500
     })
   });
-  if (!respuesta.ok) throw new Error(`OpenAI respondió ${respuesta.status}`);
+  if (!respuesta.ok) {
+    console.warn(`OpenAI respondió ${respuesta.status}; se usará respaldo local.`);
+    return { modo: 'local', contenido: respuestasLocales[tipo] || respuestasLocales.reporte };
+  }
   const datos = await respuesta.json();
   return { modo: 'openai', contenido: datos.output_text || 'No se obtuvo una respuesta.' };
 }
