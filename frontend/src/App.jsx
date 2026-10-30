@@ -73,7 +73,22 @@ const mantenimientosIniciales = [
       observaciones: 'Pendiente verificar equipo de proteccion personal.',
       fecha: ''
     }
-  }
+  },
+  ...['Torre Infantil', 'Barco Pirata', 'Mini Montana Rusa', 'Laberinto Movil', 'Tren Infantil'].map((juego, indice) => ({
+    id: indice + 4,
+    juego,
+    tipo: ['Correctivo', 'Preventivo', 'Correctivo', 'Periodico', 'Preventivo'][indice],
+    tecnico: 'Tecnico de Mantenimiento',
+    prioridad: ['Alta', 'Media', 'Alta', 'Baja', 'Media'][indice],
+    estado: ['Finalizada', 'En proceso', 'En revision', 'Pendiente', 'Validado'][indice],
+    fecha: `2026-10-${String(indice + 1).padStart(2, '0')}`,
+    fechaInicio: `2026-10-${String(indice + 1).padStart(2, '0')}`,
+    fechaFin: indice === 0 ? `2026-10-02` : '',
+    maxHoras: 15,
+    registrosHoras: indice === 0 ? [{ id: 1, fecha: '2026-10-01', horas: 6, descripcion: 'Mantenimiento preventivo completado.', usuario: 'Tecnico de Mantenimiento' }] : [],
+    evidencias: indice === 1 || indice === 2 ? [`epp-${indice + 4}.jpg`] : [],
+    epp: { verificado: indice !== 3, evidencia: indice !== 3 ? `epp-${indice + 4}.jpg` : '', observaciones: indice === 3 ? 'Falta verificar casco y proteccion ocular.' : 'Equipo de proteccion completo verificado.', fecha: indice !== 3 ? `2026-10-${String(indice + 1).padStart(2, '0')}` : '' }
+  }))
 ];
 
 const usuariosIniciales = [
@@ -91,14 +106,29 @@ const alertasIniciales = [
     prioridad: 'Alta',
     estado: 'Atendida',
     mensaje: 'Orden 3: intento de procedimiento sin verificacion completa de EPP.'
-  }
+  },
+  ...[
+    ['Orden 4: falta evidencia de casco y proteccion ocular.', 'Alta', 'Pendiente'],
+    ['Orden 5: revisar boton de emergencia.', 'Media', 'Pendiente'],
+    ['Orden 6: validar EPP antes de iniciar.', 'Alta', 'Pendiente'],
+    ['Orden 7: confirmar prueba final de frenos.', 'Media', 'Atendida'],
+    ['Orden 8: ausencia de guantes en zona de atrapamiento.', 'Alta', 'Pendiente']
+  ].map(([mensaje, prioridad, estado], indice) => ({ id: indice + 2, fecha: '2026-10-30 08:00', destinatario: 'Supervisor de Seguridad', prioridad, estado, mensaje }))
 ];
 
 const inventarioInicial = [
   { id: 1, codigo: 'REP-001', nombre: 'Cojinete 6204', categoria: 'Rodamientos', stock: 18, minimo: 6, ubicacion: 'Bodega A' },
   { id: 2, codigo: 'REP-002', nombre: 'Correa industrial A-42', categoria: 'Transmision', stock: 9, minimo: 4, ubicacion: 'Bodega A' },
   { id: 3, codigo: 'REP-003', nombre: 'Sensor de proximidad', categoria: 'Electrico', stock: 5, minimo: 3, ubicacion: 'Bodega B' },
-  { id: 4, codigo: 'REP-004', nombre: 'Tornillo grado 8', categoria: 'Fijacion', stock: 3, minimo: 5, ubicacion: 'Bodega C' }
+  { id: 4, codigo: 'REP-004', nombre: 'Tornillo grado 8', categoria: 'Fijacion', stock: 3, minimo: 5, ubicacion: 'Bodega C' },
+  { id: 5, codigo: 'REP-005', nombre: 'Sensor inductivo M18', categoria: 'Electrico', stock: 8, minimo: 3, ubicacion: 'Bodega A' },
+  { id: 6, codigo: 'REP-006', nombre: 'Rodamiento 6205 ZZ', categoria: 'Mecanico', stock: 14, minimo: 5, ubicacion: 'Bodega A' },
+  { id: 7, codigo: 'REP-007', nombre: 'Freno electromagnetico', categoria: 'Seguridad', stock: 3, minimo: 2, ubicacion: 'Bodega B' },
+  { id: 8, codigo: 'REP-008', nombre: 'Cable de control 4 hilos', categoria: 'Electrico', stock: 65, minimo: 20, ubicacion: 'Bodega B' },
+  { id: 9, codigo: 'REP-009', nombre: 'Arnes de seguridad', categoria: 'EPP', stock: 6, minimo: 3, ubicacion: 'Bodega EPP' },
+  { id: 10, codigo: 'REP-010', nombre: 'Lentes de seguridad', categoria: 'EPP', stock: 18, minimo: 8, ubicacion: 'Bodega EPP' },
+  { id: 11, codigo: 'REP-011', nombre: 'Guantes anticorte', categoria: 'EPP', stock: 12, minimo: 6, ubicacion: 'Bodega EPP' },
+  { id: 12, codigo: 'REP-012', nombre: 'Botas punta de acero', categoria: 'EPP', stock: 7, minimo: 4, ubicacion: 'Bodega EPP' }
 ];
 
 function generarContrasenaTemporal() {
@@ -492,7 +522,7 @@ function AuditoriaView() {
   async function cargar() {
     try {
       const respuesta = await api.get('/auditoria');
-      setRegistros(respuesta.data || []);
+      setRegistros((respuesta.data || []).map((registro) => ({ ...registro, usuario: registro.usuario || registro.nombre_completo || registro.correo || '-' })));
       setMensaje(respuesta.data?.length ? '' : 'No hay registros todavía. Realiza un inicio de sesión o una acción para generar auditoría.');
     } catch (error) {
       setMensaje(`No se pudieron cargar los registros: ${error.response?.data?.mensaje || error.message}`);

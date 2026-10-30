@@ -16,6 +16,7 @@ async function main() {
   const databaseDir = path.resolve(__dirname, '..', 'database');
   const schemaPath = path.join(databaseDir, 'schema.sql');
   const seedPath = path.join(databaseDir, 'seed.sql');
+  const demoPath = path.join(databaseDir, 'demo_data.sql');
 
   if (!fs.existsSync(schemaPath)) {
     console.log('Migracion omitida: no se encontro database/schema.sql');
@@ -28,6 +29,11 @@ async function main() {
   if (fs.existsSync(seedPath)) {
     console.log('Aplicando seed.sql...');
     await ejecutarArchivo(seedPath);
+  }
+
+  if (fs.existsSync(demoPath)) {
+    console.log('Aplicando demo_data.sql...');
+    await ejecutarArchivo(demoPath);
   }
 
   console.log('Migracion finalizada.');
