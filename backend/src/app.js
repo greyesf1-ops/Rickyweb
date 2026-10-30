@@ -12,6 +12,7 @@ const { autenticar } = require('./middlewares/auth.middleware');
 const { permitirRoles } = require('./middlewares/roles.middleware');
 const { upload } = require('./middlewares/upload.middleware');
 const { registrarAuditoria } = require('./services/auditoria.service');
+const { generarRespuesta } = require('./services/asistente.service');
 
 const app = express();
 
@@ -194,6 +195,18 @@ async function obtenerOrdenes(filtros = {}) {
 
 app.get('/api/salud', (_req, res) => {
   res.json({ estado: 'ok', sistema: 'RickySafe Maintenance' });
+});
+
+app.post('/api/asistente', autenticar, permitirRoles('Administrador', 'Supervisor', 'Auditor'), async (req, res, next) => {
+  try {
+    const { tipo, contexto } = req.body || {};
+    if (!['reporte', 'recomendaciones', 'alertas', 'riesgos'].includes(tipo)) {
+      return res.status(400).json({ mensaje: 'Tipo de asistencia no válido.' });
+    }
+    return res.json(await generarRespuesta({ tipo, contexto }));
+  } catch (error) {
+    return next(error);
+  }
 });
 
 app.post('/api/auth/login', async (req, res, next) => {

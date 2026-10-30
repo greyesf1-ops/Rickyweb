@@ -4,6 +4,7 @@ import Sidebar from './components/Sidebar.jsx';
 import Navbar from './components/Navbar.jsx';
 import CardResumen from './components/CardResumen.jsx';
 import BadgeEstado from './components/BadgeEstado.jsx';
+import { consultarAsistente } from './services/asistente.service.js';
 
 const mantenimientosIniciales = [
   {
@@ -1142,6 +1143,7 @@ function AppShell() {
     alertas: <AlertasView alertas={alertas} onAtender={atenderAlerta} />,
     validaciones: <Placeholder titulo="Validaciones" descripcion="Revision por supervisor, aprobacion, rechazo y observaciones obligatorias." />,
     reportes: <ReportesView mantenimientos={mantenimientos} />,
+    asistente: <AsistenteView mantenimientos={mantenimientos} alertas={alertas} />,
     auditoria: <Placeholder titulo="Auditoria" descripcion="Registro de acciones importantes realizadas dentro del sistema." />
   };
 
@@ -1164,6 +1166,29 @@ function AppShell() {
       </div>
     </div>
   );
+}
+
+function AsistenteView({ mantenimientos, alertas }) {
+  const [tipo, setTipo] = useState('reporte');
+  const [resultado, setResultado] = useState('Selecciona una función para generar una orientación.');
+  const [cargando, setCargando] = useState(false);
+  async function ejecutar() {
+    setCargando(true);
+    try {
+      const respuesta = await consultarAsistente({ tipo, contexto: JSON.stringify({ mantenimientos, alertas }) });
+      setResultado(`${respuesta.data.modo === 'openai' ? 'Respuesta con OpenAI' : 'Respuesta local de respaldo'}\n\n${respuesta.data.contenido}`);
+    } catch (error) {
+      setResultado(`No fue posible consultar el asistente: ${error.response?.data?.mensaje || error.message}`);
+    } finally { setCargando(false); }
+  }
+  return <section className="space-y-5">
+    <div><p className="text-sm font-bold uppercase tracking-widest text-brand-teal">RickySafe Intelligence</p><h2 className="mt-1 text-3xl font-black text-brand-navy">Asistente inteligente</h2><p className="mt-2 text-slate-600">Genera orientación operativa sin reemplazar la revisión del responsable de seguridad.</p></div>
+    <div className="grid gap-4 rounded-2xl border border-brand-teal/20 bg-brand-cream p-5 shadow-sm md:grid-cols-[1fr_auto]">
+      <select value={tipo} onChange={(event) => setTipo(event.target.value)} className="rounded-xl border border-slate-300 px-3 py-3 font-semibold"><option value="reporte">Generar reporte</option><option value="recomendaciones">Recomendaciones de mantenimiento</option><option value="alertas">Resumen de alertas</option><option value="riesgos">Detectar riesgos en evidencias</option></select>
+      <button type="button" onClick={ejecutar} disabled={cargando} className="rounded-xl bg-gradient-to-r from-brand-navy to-brand-teal px-5 py-3 font-bold text-white disabled:opacity-60">{cargando ? 'Analizando...' : 'Generar orientación'}</button>
+    </div>
+    <pre className="whitespace-pre-wrap rounded-2xl border border-brand-teal/20 bg-[#e9f5f1] p-5 text-sm leading-7 text-slate-700 shadow-sm">{resultado}</pre>
+  </section>;
 }
 
 function Root() {

@@ -32,6 +32,8 @@ services:
       DB_PASSWORD: ${POSTGRES_PASSWORD:-cambia_esta_contrasena}
       JWT_SECRET: ${JWT_SECRET:-cambia_esta_clave_larga}
       UPLOAD_PATH: src/uploads/evidencias
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
     volumes:
       - rickysafe_evidencias:/app/src/uploads/evidencias
       - ./database:/app/database:ro

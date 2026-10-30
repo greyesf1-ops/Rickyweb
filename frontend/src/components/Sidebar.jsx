@@ -6,6 +6,7 @@ const items = [
   { id: 'alertas', label: 'Alertas' },
   { id: 'validaciones', label: 'Validaciones' },
   { id: 'reportes', label: 'Reportes' },
+  { id: 'asistente', label: 'Asistente inteligente' },
   { id: 'auditoria', label: 'Auditoria' }
 ];
 
