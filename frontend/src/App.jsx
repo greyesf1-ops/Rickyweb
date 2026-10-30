@@ -990,7 +990,7 @@ function ReportesView({ mantenimientos }) {
   );
 }
 
-function InventarioView() {
+function InventarioView({ inventario = inventarioInicial }) {
   return (
     <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
       <div className="border-b border-slate-200 p-4">
@@ -1010,7 +1010,7 @@ function InventarioView() {
             </tr>
           </thead>
           <tbody>
-            {inventarioInicial.map((item) => (
+            {inventario.map((item) => (
               <tr key={item.id} className="border-t border-slate-100">
                 <td className="px-3 py-3 font-semibold">{item.codigo}</td>
                 <td className="px-3 py-3">{item.nombre}</td>
@@ -1033,9 +1033,67 @@ function AppShell() {
   const [activo, setActivo] = useState('dashboard');
   const [menuAbierto, setMenuAbierto] = useState(false);
   const [usuarios, setUsuarios] = useState(cargarUsuarios);
+  const [inventario, setInventario] = useState(inventarioInicial);
   const [mantenimientos, setMantenimientos] = useState(mantenimientosIniciales);
   const [alertas, setAlertas] = useState(alertasIniciales);
   const [mantenimientoSeleccionado, setMantenimientoSeleccionado] = useState(1);
+
+  useEffect(() => {
+    let activo = true;
+    async function sincronizar() {
+      try {
+        const [mantenimientoResponse, alertasResponse, usuariosResponse, inventarioResponse] = await Promise.all([
+          api.get('/mantenimientos'),
+          api.get('/alertas-seguridad'),
+          api.get('/usuarios'),
+          api.get('/inventario')
+        ]);
+        if (!activo) return;
+        setMantenimientos((actuales) => mantenimientoResponse.data.map((item) => {
+          const anterior = actuales.find((actual) => actual.id === item.id_mantenimiento);
+          return {
+            ...(anterior || {}),
+            id: item.id_mantenimiento,
+            juego: item.nombre_juego,
+            tipo: item.tipo_mantenimiento,
+            tecnico: item.tecnico,
+            prioridad: anterior?.prioridad || 'Media',
+            estado: item.estado,
+            fecha: item.fecha_inicio?.slice(0, 10) || anterior?.fecha || '',
+            fechaInicio: item.fecha_inicio?.slice(0, 10) || anterior?.fechaInicio || '',
+            fechaFin: item.fecha_fin?.slice(0, 10) || anterior?.fechaFin || '',
+            maxHoras: anterior?.maxHoras || 15,
+            registrosHoras: anterior?.registrosHoras || [],
+            evidencias: anterior?.evidencias || [],
+            epp: { verificado: item.epp_verificado, evidencia: item.epp_evidencia || '', observaciones: item.epp_observaciones || '', fecha: item.epp_fecha?.slice(0, 10) || '' }
+          };
+        }));
+        setAlertas(alertasResponse.data.map((item) => ({
+          id: item.id_alerta,
+          fecha: item.fecha_creacion,
+          destinatario: item.destinatario,
+          prioridad: item.prioridad,
+          estado: item.estado,
+          mensaje: item.mensaje
+        })));
+        setUsuarios(usuariosResponse.data.map((item) => ({
+          id: item.id_usuario, nombre: item.nombre_completo, correo: item.correo, usuario: item.usuario,
+          contrasena: '', rol: item.rol || item.nombre_rol, departamento: item.departamento || '', turno: item.turno || '',
+          telefono: item.telefono || '', ultimoAcceso: item.ultimo_acceso || '', activo: item.estado, temporal: false
+        })));
+        setInventario(inventarioResponse.data.map((item) => ({
+          id: item.id_repuesto, codigo: item.codigo_repuesto, nombre: item.nombre_repuesto, categoria: item.categoria,
+          stock: Number(item.stock_actual), minimo: Number(item.stock_minimo), ubicacion: item.ubicacion,
+          estado: item.estado_stock === 'Bajo stock' ? 'En revision' : 'Activo'
+        })));
+      } catch (error) {
+        // El modo local conserva los datos de demostración si la API no está disponible.
+      }
+    }
+    sincronizar();
+    const intervalo = window.setInterval(sincronizar, 5000);
+    return () => { activo = false; window.clearInterval(intervalo); };
+  }, []);
 
   function toggleUsuario(id) {
     setUsuarios((actuales) => {
@@ -1195,7 +1253,12 @@ function AppShell() {
     return 'Orden finalizada correctamente.';
   }
 
-  function atenderAlerta(id) {
+  async function atenderAlerta(id) {
+    try {
+      await api.put(`/alertas-seguridad/${id}/atender`);
+    } catch (error) {
+      return;
+    }
     setAlertas((actuales) => actuales.map((item) => (
       item.id === id ? { ...item, estado: 'Atendida' } : item
     )));
@@ -1204,7 +1267,7 @@ function AppShell() {
   const vistas = {
     dashboard: <Dashboard mantenimientos={mantenimientos} />,
     usuarios: <UsuariosView usuarios={usuarios} usuarioActual={usuario} onToggle={toggleUsuario} onCreate={crearUsuario} />,
-    inventario: <InventarioView />,
+    inventario: <InventarioView inventario={inventario} />,
     mantenimientos: (
       <MantenimientosView
         mantenimientos={mantenimientos}
