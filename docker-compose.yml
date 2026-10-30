@@ -36,6 +36,11 @@ services:
       - rickysafe_evidencias:/app/src/uploads/evidencias
       - ./database:/app/database:ro
     command: sh -c "node src/migrate.js || true; npm start"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3001/api/salud').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
     depends_on:
       db:
         condition: service_healthy
@@ -51,6 +56,11 @@ services:
       - "80:80"
     depends_on:
       - backend
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "--quiet", "http://127.0.0.1/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 volumes:
   rickysafe_pgdata:

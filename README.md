@@ -164,3 +164,14 @@ npm run build
 ```
 
 No se incluyen secretos. Usa `.env.example` como referencia para crear los archivos `.env` locales.
+
+## Prueba manual de entrega
+
+Con Docker Desktop abierto:
+
+```bash
+docker compose up -d --build
+docker compose ps
+```
+
+Los tres servicios deben aparecer como activos: `rickysafe-db`, `rickysafe-backend` y `rickysafe-web`. Abre `http://localhost` y usa `admin@rickysafe.local` / `admin123`. Verifica login, mantenimientos, EPP, alertas, evidencias y reportes. Para apagar el entorno: `docker compose down`.
