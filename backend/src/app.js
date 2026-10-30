@@ -899,6 +899,9 @@ app.put('/api/checklist/:id', autenticar, permitirRoles('Administrador', 'Tecnic
 app.post('/api/mantenimientos/:id/evidencias', autenticar, upload.single('archivo'), async (req, res, next) => {
   try {
     const archivo = req.file;
+    if (!archivo) {
+      return res.status(400).json({ mensaje: 'Debes adjuntar un archivo de evidencia' });
+    }
     const { descripcion } = req.body;
 
     const { rows } = await db.query(
