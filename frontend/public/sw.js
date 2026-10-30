@@ -1,4 +1,4 @@
-const CACHE = 'rickysafe-shell-v1';
+const CACHE = 'rickysafe-shell-v3';
 const SHELL = ['/', '/index.html', '/manifest.webmanifest', '/icon.svg'];
 
 self.addEventListener('install', (event) => {
@@ -19,6 +19,9 @@ self.addEventListener('fetch', (event) => {
       const copy = response.clone();
       caches.open(CACHE).then((cache) => cache.put(request, copy));
       return response;
-    }).catch(() => caches.match(request).then((cached) => cached || caches.match('/index.html')))
+    }).catch(() => caches.match(request).then((cached) => {
+      if (cached) return cached;
+      return request.destination === 'document' ? caches.match('/index.html') : Response.error();
+    }))
   );
 });
