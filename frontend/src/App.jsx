@@ -242,10 +242,31 @@ function Login() {
   }
 
   return (
-    <main className="grid min-h-screen place-items-center bg-slate-100 px-4">
-      <form onSubmit={submit} className="w-full max-w-md rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
-        <p className="text-sm font-semibold uppercase tracking-widest text-brand-teal">RickySafe Maintenance</p>
-        <h1 className="mt-2 text-3xl font-bold text-slate-900">Inicio de sesion</h1>
+    <main className="relative grid min-h-screen place-items-center overflow-hidden bg-slate-100 px-4 py-10">
+      <div className="pointer-events-none absolute -left-24 -top-24 h-72 w-72 rounded-full bg-brand-teal/20 blur-2xl" />
+      <div className="pointer-events-none absolute -bottom-32 -right-16 h-96 w-96 rounded-full bg-brand-coral/20 blur-3xl" />
+      <div className="relative grid w-full max-w-5xl overflow-hidden rounded-3xl border border-brand-teal/20 bg-brand-cream/90 shadow-2xl lg:grid-cols-[1.05fr_.95fr]">
+        <section className="hidden bg-gradient-to-br from-brand-navy via-[#35617a] to-brand-teal p-10 text-white lg:flex lg:flex-col lg:justify-between">
+          <div>
+            <div className="mb-8 flex h-16 w-16 items-center justify-center rounded-2xl bg-brand-coral text-3xl font-black shadow-lg">R</div>
+            <p className="text-sm font-bold uppercase tracking-[0.25em] text-teal-100">RickySafe Maintenance</p>
+            <h2 className="mt-5 text-4xl font-black leading-tight">Control seguro para cada mantenimiento.</h2>
+            <p className="mt-5 max-w-md text-base leading-7 text-slate-100">Gestiona EPP, horas trabajadas, evidencias y mantenimientos programados desde un solo lugar.</p>
+          </div>
+          <div className="grid grid-cols-3 gap-3 text-center text-xs font-semibold">
+            <div className="rounded-2xl bg-white/10 p-4">EPP<br /><span className="text-teal-100">verificado</span></div>
+            <div className="rounded-2xl bg-white/10 p-4">Ordenes<br /><span className="text-teal-100">trazables</span></div>
+            <div className="rounded-2xl bg-white/10 p-4">Alertas<br /><span className="text-teal-100">a tiempo</span></div>
+          </div>
+        </section>
+        <form onSubmit={submit} className="p-7 sm:p-10">
+          <div className="mb-8 flex items-center gap-3 lg:hidden">
+            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-brand-coral text-xl font-black text-white">R</div>
+            <p className="text-sm font-bold uppercase tracking-widest text-brand-teal">RickySafe Maintenance</p>
+          </div>
+          <p className="text-sm font-bold uppercase tracking-widest text-brand-teal">Acceso al sistema</p>
+          <h1 className="mt-2 text-3xl font-black text-brand-navy">Bienvenido de nuevo</h1>
+          <p className="mt-2 text-sm text-slate-600">Ingresa tus credenciales para continuar con la gestión operativa.</p>
         <label className="mt-6 block text-sm font-semibold text-slate-700">
           Correo o usuario
           <input name="identificador" className="mt-2 w-full rounded border border-slate-300 px-3 py-2" defaultValue="admin@rickysafe.local" />
@@ -255,10 +276,11 @@ function Login() {
           <input name="contrasena" className="mt-2 w-full rounded border border-slate-300 px-3 py-2" type="password" defaultValue="admin123" />
         </label>
         {mensaje ? <p className="mt-4 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-900">{mensaje}</p> : null}
-        <button className="mt-6 w-full rounded-lg bg-brand-navy px-4 py-2 font-semibold text-white" type="submit">
+        <button className="mt-6 w-full rounded-xl bg-gradient-to-r from-brand-navy to-brand-teal px-4 py-3 font-bold text-white shadow-lg shadow-brand-teal/20 transition hover:-translate-y-0.5 hover:shadow-xl" type="submit">
           Entrar al sistema
         </button>
-      </form>
+        </form>
+      </div>
     </main>
   );
 }
