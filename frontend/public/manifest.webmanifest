@@ -1,0 +1,11 @@
+{
+  "name": "RickySafe Maintenance",
+  "short_name": "RickySafe",
+  "description": "Control operativo de EPP y mantenimientos de Rickylandia",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f4f7fb",
+  "theme_color": "#162238",
+  "lang": "es-GT",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}

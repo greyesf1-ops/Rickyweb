@@ -28,6 +28,10 @@ jobs:
         working-directory: backend
         run: npm run check
 
+      - name: Ejecutar pruebas de humo de API
+        working-directory: backend
+        run: npm run test:api
+
       - name: Instalar frontend
         working-directory: frontend
         run: npm install

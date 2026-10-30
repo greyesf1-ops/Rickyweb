@@ -145,3 +145,22 @@ El flujo en `.github/workflows/validate.yml` valida:
 - Build de produccion del frontend.
 
 Para despliegue automatico a VPS se pueden agregar acciones despues, pero hacen falta secretos como `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY` y la ruta final del proyecto.
+
+## Aportes de Seminario
+
+La entrega incorpora una PWA instalable con caché de lectura controlada y pruebas automatizadas de API. El análisis, las decisiones, los límites, el diagrama y los comandos reproducibles están en `docs/seminario-tecnologias.md`.
+
+Verificación rápida:
+
+```bash
+cd backend
+npm ci
+npm run check
+npm run test:api
+
+cd ../frontend
+npm ci
+npm run build
+```
+
+No se incluyen secretos. Usa `.env.example` como referencia para crear los archivos `.env` locales.
