@@ -2,9 +2,9 @@ name: Deploy VPS
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
+
+# Este workflow se ejecuta manualmente cuando las credenciales de una VPS
+# ya están configuradas en Settings > Secrets and variables > Actions.
 
 jobs:
   deploy:
