@@ -198,16 +198,18 @@ function escaparPdf(valor) {
 
 function crearPdfSimple(lineas) {
   const contenido = [
-    'BT',
+    'q',
     '0.12 0.32 0.45 rg',
     '50 805 32 20 re f',
+    'Q',
+    'BT',
     '1 1 1 rg',
     '/F1 12 Tf',
     '60 810 Td',
     '(R) Tj',
     '0 0 0 rg',
-    '50 790 Td',
     '/F1 12 Tf',
+    '50 770 Td',
     ...lineas.slice(0, 34).flatMap((linea, index) => [
       index === 0 ? '' : '0 -20 Td',
       `(${escaparPdf(linea)}) Tj`
@@ -671,7 +673,7 @@ function MantenimientosView({ mantenimientos, onVerificarEpp, onEnviarRevision, 
   const [mensaje, setMensaje] = useState('');
   const seleccionado = mantenimientos.find((item) => item.id === seleccionadoId) || mantenimientos[0];
 
-  function guardarEpp(event) {
+  async function guardarEpp(event) {
     event.preventDefault();
     const data = Object.fromEntries(new FormData(event.currentTarget));
     const archivo = event.currentTarget.elements.evidencia.files[0];
@@ -683,14 +685,14 @@ function MantenimientosView({ mantenimientos, onVerificarEpp, onEnviarRevision, 
       return;
     }
 
-    onVerificarEpp(seleccionado.id, {
+    const resultado = await onVerificarEpp(seleccionado.id, {
       verificado,
       evidencia: verificado ? evidencia : '',
       observaciones: data.observaciones || '',
       fecha: new Date().toISOString().slice(0, 10)
     });
 
-    setMensaje(verificado ? 'EPP verificado y evidencia vinculada.' : 'Alerta enviada al ingeniero de turno. Procedimiento bloqueado.');
+    setMensaje(resultado || (verificado ? 'EPP verificado y evidencia vinculada.' : 'Alerta enviada al ingeniero de turno. Procedimiento bloqueado.'));
     event.currentTarget.reset();
   }
 
@@ -699,10 +701,10 @@ function MantenimientosView({ mantenimientos, onVerificarEpp, onEnviarRevision, 
     setMensaje(resultado);
   }
 
-  function registrarHoras(event) {
+  async function registrarHoras(event) {
     event.preventDefault();
     const data = Object.fromEntries(new FormData(event.currentTarget));
-    const resultado = onRegistrarHoras(seleccionado.id, {
+    const resultado = await onRegistrarHoras(seleccionado.id, {
       fecha: data.fecha,
       horas: Number(data.horas),
       descripcion: data.descripcion,
@@ -714,8 +716,8 @@ function MantenimientosView({ mantenimientos, onVerificarEpp, onEnviarRevision, 
     }
   }
 
-  function finalizarOrden() {
-    setMensaje(onFinalizarOrden(seleccionado.id));
+  async function finalizarOrden() {
+    setMensaje(await onFinalizarOrden(seleccionado.id));
   }
 
   const horasTrabajadas = totalHoras(seleccionado);
@@ -1067,7 +1069,12 @@ function AppShell() {
     return true;
   }
 
-  function verificarEpp(id, epp) {
+  async function verificarEpp(id, epp) {
+    try {
+      await api.put(`/mantenimientos/${id}/epp`, { verificado: epp.verificado, evidencia: epp.evidencia, observaciones: epp.observaciones });
+    } catch (error) {
+      return `No se pudo sincronizar EPP con la base de datos: ${error.response?.data?.mensaje || error.message}`;
+    }
     setMantenimientos((actuales) => actuales.map((item) => {
       if (item.id !== id) return item;
       const evidencias = epp.evidencia && !item.evidencias.includes(epp.evidencia)
@@ -1097,6 +1104,7 @@ function AppShell() {
         ];
       });
     }
+    return epp.verificado ? 'EPP verificado y evidencia vinculada.' : 'Alerta enviada al ingeniero de turno. Procedimiento bloqueado.';
   }
 
   function enviarRevision(id) {
@@ -1115,7 +1123,7 @@ function AppShell() {
     return 'Mantenimiento enviado a revision.';
   }
 
-  function registrarHoras(id, data) {
+  async function registrarHoras(id, data) {
     const mantenimiento = mantenimientos.find((item) => item.id === id);
     if (!mantenimiento) return 'Orden no encontrada.';
     if (['Finalizada', 'Cancelada', 'Validado'].includes(mantenimiento.estado)) {
@@ -1129,6 +1137,12 @@ function AppShell() {
     const maximo = Number(mantenimiento.maxHoras || 15);
     if (totalActual + horas > maximo) {
       return `No se puede guardar: la orden va en ${totalActual}/${maximo} horas y no puede pasar de ${maximo}.`;
+    }
+
+    try {
+      await api.post(`/ordenes-mantenimiento/${id}/horas`, { work_date: data.fecha, hours_worked: horas, description: data.descripcion, evidence: data.evidencia, progress_status: 'En proceso' });
+    } catch (error) {
+      return `No se pudo guardar en la base de datos: ${error.response?.data?.mensaje || error.message}`;
     }
 
     setMantenimientos((actuales) => actuales.map((item) => {
@@ -1159,11 +1173,17 @@ function AppShell() {
     return `Horas registradas. Avance actualizado a ${totalActual + horas}/${maximo}.`;
   }
 
-  function finalizarOrden(id) {
+  async function finalizarOrden(id) {
     const mantenimiento = mantenimientos.find((item) => item.id === id);
     if (!mantenimiento) return 'Orden no encontrada.';
     if (['Finalizada', 'Cancelada', 'Validado'].includes(mantenimiento.estado)) {
       return 'La orden ya estaba cerrada.';
+    }
+
+    try {
+      await api.put(`/ordenes-mantenimiento/${id}/finalizar`, { observations: 'Orden finalizada desde RickySafe.' });
+    } catch (error) {
+      return `No se pudo finalizar en la base de datos: ${error.response?.data?.mensaje || error.message}`;
     }
 
     setMantenimientos((actuales) => actuales.map((item) => (

@@ -36,6 +36,13 @@ JOIN juegos j ON j.codigo_juego = v.codigo
 JOIN LATERAL (SELECT id_protocolo FROM protocolos WHERE tipo_mantenimiento = v.tipo ORDER BY id_protocolo LIMIT 1) p ON TRUE
 WHERE NOT EXISTS (SELECT 1 FROM mantenimientos m WHERE m.id_juego=j.id_juego AND m.fecha_inicio::date=v.fecha_inicio::date);
 
+INSERT INTO maintenance_orders (request_id, order_code, id_mantenimiento, id_juego, assigned_to, status, priority, description, start_date, max_hours, total_hours)
+SELECT NULL, 'RS-DEMO-' || LPAD(m.id_mantenimiento::text, 3, '0'), m.id_mantenimiento, m.id_juego, m.id_tecnico,
+       m.estado, CASE WHEN m.tipo_mantenimiento = 'Correctivo' THEN 'Alta' ELSE 'Media' END,
+       m.descripcion, m.fecha_inicio, 15, 0
+FROM mantenimientos m
+WHERE NOT EXISTS (SELECT 1 FROM maintenance_orders o WHERE o.id_mantenimiento = m.id_mantenimiento);
+
 INSERT INTO alertas_seguridad (id_mantenimiento,id_usuario,destinatario,prioridad,estado,mensaje)
 SELECT m.id_mantenimiento, 1, 'Supervisor de Seguridad', v.prioridad, v.estado, v.mensaje
 FROM (VALUES
