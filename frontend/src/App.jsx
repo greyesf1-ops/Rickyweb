@@ -197,6 +197,9 @@ function escaparPdf(valor) {
 }
 
 function crearPdfSimple(lineas) {
+  const seguro = (valor) => String(valor ?? '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\x20-\x7E]/g, '?');
   const contenido = [
     'q',
     '0.12 0.32 0.45 rg',
@@ -212,7 +215,7 @@ function crearPdfSimple(lineas) {
     '50 770 Td',
     ...lineas.slice(0, 34).flatMap((linea, index) => [
       index === 0 ? '' : '0 -20 Td',
-      `(${escaparPdf(linea)}) Tj`
+      `(${escaparPdf(seguro(linea))}) Tj`
     ]).filter(Boolean),
     'ET'
   ].join('\n');
@@ -223,20 +226,21 @@ function crearPdfSimple(lineas) {
     '4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n',
     `5 0 obj\n<< /Length ${contenido.length} >>\nstream\n${contenido}\nendstream\nendobj\n`
   ];
+  const encoder = new TextEncoder();
   let pdf = '%PDF-1.4\n';
   const offsets = [0];
   objetos.forEach((objeto) => {
-    offsets.push(pdf.length);
+    offsets.push(encoder.encode(pdf).length);
     pdf += objeto;
   });
-  const xrefOffset = pdf.length;
+  const xrefOffset = encoder.encode(pdf).length;
   pdf += `xref\n0 ${objetos.length + 1}\n`;
   pdf += '0000000000 65535 f \n';
   offsets.slice(1).forEach((offset) => {
     pdf += `${String(offset).padStart(10, '0')} 00000 n \n`;
   });
   pdf += `trailer\n<< /Size ${objetos.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
-  return pdf;
+  return encoder.encode(pdf);
 }
 
 function Login() {
