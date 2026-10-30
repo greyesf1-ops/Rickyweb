@@ -700,13 +700,15 @@ app.post('/api/ordenes-mantenimiento', autenticar, permitirRoles('Administrador'
 
 app.get('/api/ordenes-mantenimiento/:id/horas', autenticar, async (req, res, next) => {
   try {
+    const orden = await db.query('SELECT id FROM maintenance_orders WHERE id_mantenimiento = $1 OR id = $1 ORDER BY (id_mantenimiento = $1) DESC, id LIMIT 1', [req.params.id]);
+    const orderId = orden.rows[0]?.id || req.params.id;
     const { rows } = await db.query(
       `SELECT w.*, u.nombre_completo AS tecnico
        FROM maintenance_work_logs w
        JOIN usuarios u ON u.id_usuario = w.user_id
        WHERE w.order_id = $1
        ORDER BY w.work_date DESC, w.created_at DESC`,
-      [req.params.id]
+      [orderId]
     );
     res.json(rows);
   } catch (error) {
@@ -731,9 +733,12 @@ app.post('/api/ordenes-mantenimiento/:id/horas', autenticar, permitirRoles('Admi
 
     await client.query('BEGIN');
 
+    const idOrden = await client.query('SELECT id FROM maintenance_orders WHERE id_mantenimiento = $1 OR id = $1 ORDER BY (id_mantenimiento = $1) DESC, id LIMIT 1', [req.params.id]);
+    const orderId = idOrden.rows[0]?.id || req.params.id;
+
     const ordenResult = await client.query(
       'SELECT * FROM maintenance_orders WHERE id = $1 FOR UPDATE',
-      [req.params.id]
+      [orderId]
     );
     const orden = ordenResult.rows[0];
 
@@ -808,6 +813,8 @@ app.post('/api/ordenes-mantenimiento/:id/horas', autenticar, permitirRoles('Admi
 app.put('/api/ordenes-mantenimiento/:id/finalizar', autenticar, permitirRoles('Administrador', 'Tecnico', 'Supervisor'), async (req, res, next) => {
   try {
     const { observations } = req.body;
+    const idOrden = await db.query('SELECT id FROM maintenance_orders WHERE id_mantenimiento = $1 OR id = $1 ORDER BY (id_mantenimiento = $1) DESC, id LIMIT 1', [req.params.id]);
+    const orderId = idOrden.rows[0]?.id || req.params.id;
     const { rows } = await db.query(
       `UPDATE maintenance_orders
        SET status = 'Finalizada',
@@ -816,7 +823,7 @@ app.put('/api/ordenes-mantenimiento/:id/finalizar', autenticar, permitirRoles('A
            updated_at = CURRENT_TIMESTAMP
        WHERE id = $2 AND status NOT IN ('Finalizada', 'Cancelada')
        RETURNING *`,
-      [observations || null, req.params.id]
+      [observations || null, orderId]
     );
 
     if (!rows[0]) {
