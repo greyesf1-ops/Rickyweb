@@ -5,6 +5,7 @@ import Navbar from './components/Navbar.jsx';
 import CardResumen from './components/CardResumen.jsx';
 import BadgeEstado from './components/BadgeEstado.jsx';
 import { consultarAsistente } from './services/asistente.service.js';
+import { login as loginApi } from './services/auth.service.js';
 
 const mantenimientosIniciales = [
   {
@@ -202,11 +203,19 @@ function Login() {
   const { iniciarSesion } = useAuth();
   const [mensaje, setMensaje] = useState('');
 
-  function submit(event) {
+  async function submit(event) {
     event.preventDefault();
     const data = Object.fromEntries(new FormData(event.currentTarget));
     const identificador = String(data.identificador || '').trim().toLowerCase();
     const contrasena = String(data.contrasena || '');
+    try {
+      const respuesta = await loginApi({ correo: identificador, contrasena });
+      iniciarSesion(respuesta.data);
+      return;
+    } catch (error) {
+      // El modo local permite seguir usando la demostración si el backend no está disponible.
+    }
+
     const usuarios = cargarUsuarios();
     const encontrado = usuarios.find((item) => (
       item.correo.toLowerCase() === identificador || item.usuario.toLowerCase() === identificador
